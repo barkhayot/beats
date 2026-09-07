@@ -234,17 +234,17 @@ func flattenSettings(metricSetFields mapstr.M) mapstr.M {
 	return result
 }
 
-func eventsMapping(r mb.ReporterV2, info *utils.ClusterInfo, settings *map[string]interface{}) error {
+func eventsMapping(r mb.ReporterV2, info *utils.ClusterInfo, settings *map[string]any) error {
 	metricSetFields, err := schema.Apply(*settings)
 
 	if err != nil {
 		err = fmt.Errorf("failed applying cluster settings schema %w", err)
-		events.LogAndSendErrorEventWithRandomTransactionId(err, info, r, ClusterSettingsMetricSet, ClusterSettingsPath)
+		events.LogAndSendErrorEventWithoutTransactionId(err, info, r, ClusterSettingsMetricSet, ClusterSettingsPath)
 		return nil
 	}
 
 	// Flatten settings with precedence: transient > persistent > defaults
-	r.Event(events.CreateEventWithRandomTransactionId(info, flattenSettings(metricSetFields)))
+	r.Event(events.CreateEventWithoutTransactionId(info, flattenSettings(metricSetFields)))
 
 	return nil
 }

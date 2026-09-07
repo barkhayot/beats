@@ -441,6 +441,8 @@ func (t target) isWantedHeader(got http.Header) bool {
 func TestServerPool(t *testing.T) {
 	for _, test := range serverPoolTests {
 		t.Run(test.name, func(t *testing.T) {
+			cfgs, events, wantErr := remapAddrs(t, test.cfgs, test.events, test.wantErr)
+
 			servers := pool{servers: make(map[string]*server)}
 
 			var (
@@ -450,11 +452,8 @@ func TestServerPool(t *testing.T) {
 			ctx, cancel := newCtx("server_pool_test", test.name)
 			metrics := newInputMetrics(monitoring.NewRegistry(), logp.NewNopLogger())
 			var wg sync.WaitGroup
-			for _, cfg := range test.cfgs {
-				cfg := cfg
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+			for _, cfg := range cfgs {
+				wg.Go(func() {
 					err := servers.serve(ctx, cfg, pub.Publish, metrics)
 					if err != http.ErrServerClosed {
 						select {
@@ -462,11 +461,11 @@ func TestServerPool(t *testing.T) {
 						default:
 						}
 					}
-				}()
+				})
 			}
-			if test.wantErr == nil {
+			if wantErr == nil {
 				addrCount := make(map[string]int)
-				for _, cfg := range test.cfgs {
+				for _, cfg := range cfgs {
 					addrCount[cfg.addr]++
 				}
 				for addr := range addrCount {
@@ -477,11 +476,11 @@ func TestServerPool(t *testing.T) {
 				}
 			}
 
-			if test.wantErr != nil {
+			if wantErr != nil {
 				select {
 				case err := <-fails:
-					if !errors.Is(err, test.wantErr) {
-						t.Errorf("unexpected error calling serve: got=%#q, want=%#q", err, test.wantErr)
+					if !errors.Is(err, wantErr) {
+						t.Errorf("unexpected error calling serve: got=%#q, want=%#q", err, wantErr)
 					}
 				case <-time.After(5 * time.Second):
 					t.Errorf("expected error calling serve")
@@ -493,7 +492,7 @@ func TestServerPool(t *testing.T) {
 				default:
 				}
 			}
-			for i, e := range test.events {
+			for i, e := range events {
 				resp, err := doRequest(test.method, e.url, "application/json", strings.NewReader(e.event))
 				if err != nil {
 					t.Fatalf("failed to post event #%d: %v", i, err)
@@ -522,21 +521,73 @@ func TestServerPool(t *testing.T) {
 
 			// Try to re-register the same addresses.
 			ctx, cancel = newCtx("server_pool_test", test.name)
-			for _, cfg := range test.cfgs {
-				cfg := cfg
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+			for _, cfg := range cfgs {
+				wg.Go(func() {
 					err := servers.serve(ctx, cfg, pub.Publish, metrics)
-					if err != nil && err != http.ErrServerClosed && test.wantErr == nil {
+					if err != nil && err != http.ErrServerClosed && wantErr == nil { //nolint:errorlint // http.ErrServerClosed is a documented sentinel, never wrapped.
 						t.Errorf("failed to re-register %v: %v", cfg.addr, err)
 					}
-				}()
+				})
 			}
 			cancel()
 			wg.Wait()
 		})
 	}
+}
+
+// remapAddrs allocates OS-assigned ports for each unique logical address in
+// cfgs and returns deep copies of cfgs, events, and wantErr with the real
+// addresses substituted. The originals are not modified.
+func remapAddrs(t *testing.T, cfgs []*httpEndpoint, events []target, wantErr error) ([]*httpEndpoint, []target, error) {
+	t.Helper()
+
+	m := make(map[string]string)      // logical addr → real addr
+	lns := make([]net.Listener, 0, 2) // hold open until all allocated
+	for _, cfg := range cfgs {
+		if _, ok := m[cfg.addr]; ok {
+			continue
+		}
+		ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("allocating port for %s: %v", cfg.addr, err)
+		}
+		m[cfg.addr] = ln.Addr().String()
+		lns = append(lns, ln)
+	}
+	for _, ln := range lns {
+		ln.Close()
+	}
+
+	out := make([]*httpEndpoint, len(cfgs))
+	for i, cfg := range cfgs {
+		c := *cfg
+		actual := m[cfg.addr]
+		host, port, err := net.SplitHostPort(actual)
+		if err != nil {
+			t.Fatalf("splitting address %s: %v", actual, err)
+		}
+		c.addr = actual
+		c.config.ListenAddress = host
+		c.config.ListenPort = port
+		out[i] = &c
+	}
+
+	ev := make([]target, len(events))
+	copy(ev, events)
+	for i := range ev {
+		for logical, actual := range m {
+			ev[i].url = strings.Replace(ev[i].url, logical, actual, 1)
+		}
+	}
+
+	if e, ok := wantErr.(invalidTLSStateErr); ok { //nolint:errorlint // invalidTLSStateErr is never wrapped.
+		if actual, ok := m[e.addr]; ok {
+			e.addr = actual
+			wantErr = e
+		}
+	}
+
+	return out, ev, wantErr
 }
 
 // TestConcurrentExceedMaxInFlight tests that concurrent requests are properly
@@ -564,14 +615,19 @@ func TestConcurrentExceedMaxInFlight(t *testing.T) {
 		acker.ACK()
 	}
 
+	addr := freeAddr(t)
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("splitting free address: %v", err)
+	}
 	cfg := &httpEndpoint{
-		addr: "127.0.0.1:9010",
+		addr: addr,
 		config: config{
 			Method:            http.MethodPost,
 			ResponseCode:      http.StatusOK,
 			ResponseBody:      `{"message": "success"}`,
-			ListenAddress:     "127.0.0.1",
-			ListenPort:        "9010",
+			ListenAddress:     host,
+			ListenPort:        port,
 			URL:               "/",
 			Prefix:            "json",
 			MaxInFlight:       100,
@@ -586,26 +642,22 @@ func TestConcurrentExceedMaxInFlight(t *testing.T) {
 
 	metrics := newInputMetrics(monitoring.NewRegistry(), logp.NewNopLogger())
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		err := servers.serve(ctx, cfg, delayedPublish, metrics)
 		if err != nil && err != http.ErrServerClosed {
 			t.Errorf("unexpected serve error: %v", err)
 		}
-	}()
-	waitForServer(t, "127.0.0.1:9010", 5*time.Second)
+	})
+	waitForServer(t, addr, 5*time.Second)
 
 	var reqWg sync.WaitGroup
 
 	// Send first request with wait_for_completion_timeout.
 	// This will hold bytes in-flight until ACK (which we delay).
 	var firstStatus int
-	reqWg.Add(1)
-	go func() {
-		defer reqWg.Done()
+	reqWg.Go(func() {
 		resp, err := doRequest(http.MethodPost,
-			"http://127.0.0.1:9010/?wait_for_completion_timeout=5s",
+			"http://"+addr+"/?wait_for_completion_timeout=5s",
 			"application/json",
 			strings.NewReader(`{"first":"request with enough bytes to exceed high water"}`))
 		if err != nil {
@@ -614,18 +666,16 @@ func TestConcurrentExceedMaxInFlight(t *testing.T) {
 		}
 		firstStatus = resp.StatusCode
 		resp.Body.Close()
-	}()
+	})
 
 	// Wait a bit for first request to be processing (reading body, waiting for ACK).
 	time.Sleep(200 * time.Millisecond)
 
 	// Send second request while first is holding bytes.
 	var secondStatus int
-	reqWg.Add(1)
-	go func() {
-		defer reqWg.Done()
+	reqWg.Go(func() {
 		resp, err := doRequest(http.MethodPost,
-			"http://127.0.0.1:9010/?wait_for_completion_timeout=5s",
+			"http://"+addr+"/?wait_for_completion_timeout=5s",
 			"application/json",
 			strings.NewReader(`{"second":"request"}`))
 		if err != nil {
@@ -634,7 +684,7 @@ func TestConcurrentExceedMaxInFlight(t *testing.T) {
 		}
 		secondStatus = resp.StatusCode
 		resp.Body.Close()
-	}()
+	})
 
 	// Wait for second request to complete (should be rejected quickly).
 	time.Sleep(200 * time.Millisecond)
@@ -657,6 +707,20 @@ func TestConcurrentExceedMaxInFlight(t *testing.T) {
 
 	cancel()
 	wg.Wait()
+}
+
+// freeAddr returns a 127.0.0.1:<port> address with an OS-assigned port that
+// was momentarily free. There is a small TOCTOU window, but in practice the
+// OS will not recycle the port before the caller binds it.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("allocating port: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
 }
 
 func TestNewHTTPEndpoint(t *testing.T) {
@@ -1061,11 +1125,9 @@ func TestPatternReregistration(t *testing.T) {
 	ctx1, cancel1 := newCtx("test", "input-1")
 	var wg sync.WaitGroup
 	err1 := make(chan error, 1)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		err1 <- servers.serve(ctx1, cfg, pub.Publish, metrics)
-	}()
+	})
 	waitForServer(t, "127.0.0.1:9023", 5*time.Second)
 
 	resp, err := doRequest("", "http://127.0.0.1:9023/a/", "application/json", strings.NewReader(`{"x":1}`))
@@ -1092,11 +1154,9 @@ func TestPatternReregistration(t *testing.T) {
 	// Re-register same pattern on a new server.
 	ctx2, cancel2 := newCtx("test", "input-2")
 	err2 := make(chan error, 1)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		err2 <- servers.serve(ctx2, cfg, pub.Publish, metrics)
-	}()
+	})
 	waitForServer(t, "127.0.0.1:9023", 5*time.Second)
 
 	resp, err = doRequest("", "http://127.0.0.1:9023/a/", "application/json", strings.NewReader(`{"x":2}`))

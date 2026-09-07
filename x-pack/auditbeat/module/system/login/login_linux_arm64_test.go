@@ -20,7 +20,6 @@ import (
 
 	"github.com/elastic/beats/v7/auditbeat/ab"
 	"github.com/elastic/beats/v7/auditbeat/core"
-	abtest "github.com/elastic/beats/v7/auditbeat/testing"
 	mbtest "github.com/elastic/beats/v7/metricbeat/mb/testing"
 	"github.com/elastic/beats/v7/x-pack/auditbeat/module/system"
 	"github.com/elastic/elastic-agent-libs/mapstr"
@@ -30,8 +29,6 @@ func TestData(t *testing.T) {
 	if byteOrder != binary.LittleEndian {
 		t.Skip("Test only works on little-endian systems - skipping.")
 	}
-
-	defer abtest.SetupDataDir(t)()
 
 	config := getBaseConfig()
 	config["login.wtmp_file_pattern"] = "./testdata/wtmp.arm"
@@ -59,8 +56,6 @@ func TestWtmp(t *testing.T) {
 	if byteOrder != binary.LittleEndian {
 		t.Skip("Test only works on little-endian systems - skipping.")
 	}
-
-	defer abtest.SetupDataDir(t)()
 
 	dir := setupTestDir(t)
 	defer os.RemoveAll(dir)
@@ -200,8 +195,6 @@ func TestBtmp(t *testing.T) {
 		t.Skip("Test only works on little-endian systems - skipping.")
 	}
 
-	defer abtest.SetupDataDir(t)()
-
 	config := getBaseConfig()
 	config["login.wtmp_file_pattern"] = ""
 	config["login.btmp_file_pattern"] = "./testdata/btmp.arm"
@@ -272,7 +265,7 @@ func TestBtmp(t *testing.T) {
 		"Timestamp is not equal: %+v", events[3].Timestamp)
 }
 
-func checkFieldValue(t *testing.T, mapstr mapstr.M, fieldName string, fieldValue interface{}) {
+func checkFieldValue(t *testing.T, mapstr mapstr.M, fieldName string, fieldValue any) {
 	value, err := mapstr.GetValue(fieldName)
 	if assert.NoError(t, err) {
 		switch v := value.(type) {
@@ -284,8 +277,8 @@ func checkFieldValue(t *testing.T, mapstr mapstr.M, fieldName string, fieldValue
 	}
 }
 
-func getBaseConfig() map[string]interface{} {
-	return map[string]interface{}{
+func getBaseConfig() map[string]any {
+	return map[string]any{
 		"module":        system.ModuleName,
 		"datasets":      []string{"login"},
 		"logging.level": "debug",
@@ -295,7 +288,7 @@ func getBaseConfig() map[string]interface{} {
 // setupTestDir creates a temporary directory, copies the test files into it,
 // and returns the path.
 func setupTestDir(t *testing.T) string {
-	tmp, err := ioutil.TempDir("", "auditbeat-login-test-dir")
+	tmp, err := os.MkdirTemp("", "auditbeat-login-test-dir")
 	if err != nil {
 		t.Fatal("failed to create temp dir")
 	}

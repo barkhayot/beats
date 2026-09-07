@@ -78,7 +78,7 @@ func (input) Test(src inputcursor.Source, _ v2.TestContext) error {
 // context cancellation or type invalidity errors, any other error will be retried.
 func (input) Run(env v2.Context, src inputcursor.Source, crsr inputcursor.Cursor, pub inputcursor.Publisher) error {
 	env.UpdateStatus(status.Starting, "")
-	var cursor map[string]interface{}
+	var cursor map[string]any
 	if !crsr.IsNew() { // Allow the user to bootstrap the program if needed.
 		env.UpdateStatus(status.Configuring, "")
 		err := crsr.Unpack(&cursor)
@@ -121,15 +121,15 @@ type noopReporter struct{}
 
 func (noopReporter) UpdateStatus(status.Status, string) {}
 
-// getURL initializes the input URL with the help of the url_program.
-func getURL(ctx context.Context, name, src, url string, state map[string]any, redaction *redact, log *logp.Logger, now func() time.Time) (string, error) {
+// getURL evaluates the url_program to compute the input URL from the current state.
+func getURL(ctx context.Context, name, src, url string, state map[string]any, redaction *redact, userAgent string, log *logp.Logger, now func() time.Time) (string, error) {
 	if src == "" {
 		return url, nil
 	}
 
 	state["url"] = url
 	// CEL program which is used to prime/initialize the input url
-	url_prg, ast, err := newProgram(ctx, src, root, nil, log)
+	url_prg, ast, err := newProgram(ctx, src, root, nil, userAgent, log)
 	if err != nil {
 		return "", err
 	}
@@ -145,12 +145,12 @@ func getURL(ctx context.Context, name, src, url string, state map[string]any, re
 	return url, nil
 }
 
-func evalURLWith(ctx context.Context, prg cel.Program, ast *cel.Ast, state map[string]interface{}, now time.Time) (string, error) {
+func evalURLWith(ctx context.Context, prg cel.Program, ast *cel.Ast, state map[string]any, now time.Time) (string, error) {
 	out, err := evalRefVal(ctx, prg, ast, state, now)
 	if err != nil {
 		return "", fmt.Errorf("failed eval: %w", err)
 	}
-	v, err := out.ConvertToNative(reflect.TypeOf(""))
+	v, err := out.ConvertToNative(reflect.TypeFor[string]())
 	if err != nil {
 		return "", fmt.Errorf("failed type conversion: %w", err)
 	}
@@ -177,10 +177,10 @@ type processor struct {
 }
 
 // process processes the data in state, updates the cursor and publishes it to
-// the reciever's publisher. The CEL program here only executes a single time,
+// the receiver's publisher. The CEL program here only executes a single time,
 // since the connection is persistent and events are received and processed in
-// real time.
-func (p processor) process(ctx context.Context, state, cursor map[string]any, start time.Time) error {
+// real time. It returns the last known good cursor after publication.
+func (p processor) process(ctx context.Context, state, cursor map[string]any, start time.Time) (map[string]any, error) {
 	goodCursor := cursor
 	p.log.Debugw("cel engine state before eval", logp.Namespace(p.ns), "state", redactor{state: state, cfg: p.redact})
 	state, err := evalWith(ctx, p.prg, p.ast, state, start)
@@ -189,7 +189,7 @@ func (p processor) process(ctx context.Context, state, cursor map[string]any, st
 		p.metrics.celEvalErrors.Add(1)
 		switch {
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			return err
+			return goodCursor, err
 		default:
 			p.metrics.errorsTotal.Inc()
 		}
@@ -205,17 +205,17 @@ func (p processor) process(ctx context.Context, state, cursor map[string]any, st
 	switch e := e.(type) {
 	case []any:
 		if len(e) == 0 {
-			return nil
+			return goodCursor, nil
 		}
 		events = e
 	case map[string]any:
 		if e == nil {
-			return nil
+			return goodCursor, nil
 		}
 		p.log.Debugw("single event object returned by evaluation", "event", e)
 		events = []any{e}
 	default:
-		return fmt.Errorf("unexpected type returned for evaluation events: %T", e)
+		return goodCursor, fmt.Errorf("unexpected type returned for evaluation events: %T", e)
 	}
 
 	// We have a non-empty batch of events to process.
@@ -255,7 +255,7 @@ func (p processor) process(ctx context.Context, state, cursor map[string]any, st
 	for i, e := range events {
 		event, ok := e.(map[string]any)
 		if !ok {
-			return fmt.Errorf("unexpected type returned for evaluation events: %T", e)
+			return goodCursor, fmt.Errorf("unexpected type returned for evaluation events: %T", e)
 		}
 		var pubCursor any
 		if cursors != nil {
@@ -266,7 +266,7 @@ func (p processor) process(ctx context.Context, state, cursor map[string]any, st
 					goodCursor = cursor
 					cursor, ok = cursors[0].(map[string]any)
 					if !ok {
-						return fmt.Errorf("unexpected type returned for evaluation cursor element: %T", cursors[0])
+						return goodCursor, fmt.Errorf("unexpected type returned for evaluation cursor element: %T", cursors[0])
 					}
 					pubCursor = cursor
 				}
@@ -274,7 +274,7 @@ func (p processor) process(ctx context.Context, state, cursor map[string]any, st
 				goodCursor = cursor
 				cursor, ok = cursors[i].(map[string]any)
 				if !ok {
-					return fmt.Errorf("unexpected type returned for evaluation cursor element: %T", cursors[i])
+					return goodCursor, fmt.Errorf("unexpected type returned for evaluation cursor element: %T", cursors[i])
 				}
 				pubCursor = cursor
 			}
@@ -301,7 +301,7 @@ func (p processor) process(ctx context.Context, state, cursor map[string]any, st
 
 		err = ctx.Err()
 		if err != nil {
-			return err
+			return goodCursor, err
 		}
 	}
 	// calculate batch processing time
@@ -322,10 +322,10 @@ func (p processor) process(ctx context.Context, state, cursor map[string]any, st
 		p.log.Infof("input stopped because context was cancelled with: %v", err)
 		err = nil
 	}
-	return err
+	return goodCursor, err
 }
 
-func evalWith(ctx context.Context, prg cel.Program, ast *cel.Ast, state map[string]interface{}, now time.Time) (map[string]interface{}, error) {
+func evalWith(ctx context.Context, prg cel.Program, ast *cel.Ast, state map[string]any, now time.Time) (map[string]any, error) {
 	out, err := evalRefVal(ctx, prg, ast, state, now)
 	if err != nil {
 		state["events"] = errorMessage(fmt.Sprintf("failed eval: %v", err))
@@ -333,7 +333,7 @@ func evalWith(ctx context.Context, prg cel.Program, ast *cel.Ast, state map[stri
 		return state, fmt.Errorf("failed eval: %w", err)
 	}
 
-	v, err := out.ConvertToNative(reflect.TypeOf((*structpb.Struct)(nil)))
+	v, err := out.ConvertToNative(reflect.TypeFor[*structpb.Struct]())
 	if err != nil {
 		state["events"] = errorMessage(fmt.Sprintf("failed proto conversion: %v", err))
 		clearWantMore(state)
@@ -351,8 +351,8 @@ func evalWith(ctx context.Context, prg cel.Program, ast *cel.Ast, state map[stri
 	}
 }
 
-func evalRefVal(ctx context.Context, prg cel.Program, ast *cel.Ast, state map[string]interface{}, now time.Time) (ref.Val, error) {
-	out, _, err := prg.ContextEval(ctx, map[string]interface{}{
+func evalRefVal(ctx context.Context, prg cel.Program, ast *cel.Ast, state map[string]any, now time.Time) (ref.Val, error) {
+	out, _, err := prg.ContextEval(ctx, map[string]any{
 		// Replace global program "now" with current time. This is necessary
 		// as the lib.Time now global is static at program instantiation time
 		// which will persist over multiple evaluations. The lib.Time behaviour
@@ -378,14 +378,14 @@ func evalRefVal(ctx context.Context, prg cel.Program, ast *cel.Ast, state map[st
 // It leaves state intact if there is no "want_more" element, and sets the element to false
 // if there is. This is necessary instead of just doing delete(state, "want_more") as
 // client CEL code may expect the want_more field to be present.
-func clearWantMore(state map[string]interface{}) {
+func clearWantMore(state map[string]any) {
 	if _, ok := state["want_more"]; ok {
 		state["want_more"] = false
 	}
 }
 
-func errorMessage(msg string) map[string]interface{} {
-	return map[string]interface{}{"error": map[string]interface{}{"message": msg}}
+func errorMessage(msg string) map[string]any {
+	return map[string]any{"error": map[string]any{"message": msg}}
 }
 
 func formHeader(cfg config) map[string][]string {

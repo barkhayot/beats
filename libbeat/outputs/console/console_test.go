@@ -115,7 +115,6 @@ func TestConsoleOutput(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.title, func(t *testing.T) {
 			logger := logptest.NewTestingLogger(t, "")
 			batch := outest.NewBatch(test.events...)
@@ -157,7 +156,7 @@ func TestMakeConsoleWithFormatCodec(t *testing.T) {
 
 	batch := outest.NewBatch(beat.Event{Fields: event("message", "hello")})
 	lines, err := withStdout(func() {
-		outputGroup, makeErr := makeConsole(nil, beat.Info{Beat: "test", Logger: logger}, outputs.NewNilObserver(), cfg, nil)
+		outputGroup, makeErr := makeConsole(nil, beat.Info{Beat: "test", Logger: logger}, outputs.NewNilObserver(), cfg)
 		require.NoError(t, makeErr, "makeConsole should initialize without errors")
 		require.Len(t, outputGroup.Clients, 1, "makeConsole should return exactly one client")
 		assert.NoError(t, outputGroup.Clients[0].Publish(context.Background(), batch), "publishing event should succeed")
@@ -200,7 +199,7 @@ func TestMakeConsoleCodecConfigErrors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := config.MustNewConfigFrom(tc.config)
-			_, err := makeConsole(nil, beat.Info{Beat: "test", Logger: logger}, outputs.NewNilObserver(), cfg, nil)
+			_, err := makeConsole(nil, beat.Info{Beat: "test", Logger: logger}, outputs.NewNilObserver(), cfg)
 			require.Error(t, err, "makeConsole should fail for invalid codec config")
 			assert.Contains(t, err.Error(), tc.errMsg, "error should include the expected validation message")
 		})

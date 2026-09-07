@@ -43,12 +43,12 @@ func Build() error {
 	return devtools.Build(devtools.DefaultBuildArgs())
 }
 
-// Deprecated: BuildSystemTestBinary builds a binary instrumented for use with Python system tests.
-// Go integration tests now build the binary automatically via TestMain.
+// BuildSystemTestBinary builds a binary instrumented for use with Python system tests.
+// Deprecated: For Go integration tests only. The test binary is now built automatically via TestMain.
 func BuildSystemTestBinary() error {
-	fmt.Println("WARNING: BuildSystemTestBinary is deprecated for Go integration tests. " +
+	fmt.Println("WARNING: BuildSystemTestBinary is deprecated for Go integration tests only. " +
 		"The test binary is now built automatically via TestMain. " +
-		"This target is only needed for Python system tests.")
+		"This target remains required for Python system tests.")
 	return devtools.BuildSystemTestBinary()
 }
 
@@ -162,7 +162,17 @@ func Update() {
 func includeList() error {
 	options := devtools.DefaultIncludeListOptions()
 	options.ImportDirs = []string{"input/*", "processors/*"}
-	return devtools.GenerateIncludeListGo(options)
+	options.BuildTags = "\n//go:build !securityonly\n"
+	if err := devtools.GenerateIncludeListGo(options); err != nil {
+		return err
+	}
+	// generate include/list_securityonly.go
+	return devtools.GenerateIncludeListGo(devtools.IncludeListOptions{
+		Outfile:               "include/list_securityonly.go",
+		BuildTags:             "\n//go:build securityonly\n",
+		Pkg:                   "include",
+		ForceInitializeModule: true,
+	})
 }
 
 // IntegTest executes integration tests (it uses Docker to run the tests).

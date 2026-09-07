@@ -3,7 +3,6 @@
 // you may not use this file except in compliance with the Elastic License.
 
 //go:build !integration
-// +build !integration
 
 package tasks_management
 
@@ -29,7 +28,7 @@ func expectValidParsedData(t *testing.T, data metricset.FetcherData[GroupedTasks
 
 	event := events[0]
 
-	auto_ops_testing.CheckEventWithRandomTransactionId(t, event, data.ClusterInfo)
+	auto_ops_testing.CheckEventWithoutTransactionId(t, event, data.ClusterInfo)
 
 	// metrics exist
 	require.True(t, len(*event.MetricSetFields.FlattenKeys()) > 2)
@@ -49,7 +48,7 @@ func expectValidParsedMultiTasks(t *testing.T, data metricset.FetcherData[Groupe
 	event1 := auto_ops_testing.GetEventByName(t, events, "task.task_id", "node1:45")
 	event2 := auto_ops_testing.GetEventByName(t, events, "task.task_id", "node2:501")
 
-	auto_ops_testing.CheckEventWithRandomTransactionId(t, event2, data.ClusterInfo)
+	auto_ops_testing.CheckEventWithoutTransactionId(t, event2, data.ClusterInfo)
 
 	// metrics exist
 

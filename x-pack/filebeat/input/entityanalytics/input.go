@@ -9,11 +9,11 @@ import (
 
 	v2 "github.com/elastic/beats/v7/filebeat/input/v2"
 	"github.com/elastic/beats/v7/libbeat/feature"
+	"github.com/elastic/beats/v7/libbeat/statestore"
 	"github.com/elastic/beats/v7/x-pack/filebeat/input/entityanalytics/provider"
 	"github.com/elastic/elastic-agent-libs/config"
 	"github.com/elastic/elastic-agent-libs/logp"
 	"github.com/elastic/elastic-agent-libs/paths"
-	"github.com/elastic/go-concert/unison"
 
 	// For provider registration.
 	_ "github.com/elastic/beats/v7/x-pack/filebeat/input/entityanalytics/provider/activedirectory"
@@ -25,7 +25,7 @@ import (
 // Name of this input.
 const Name = "entity-analytics"
 
-func Plugin(logger *logp.Logger, p *paths.Path) v2.Plugin {
+func Plugin(logger *logp.Logger, store statestore.States, p *paths.Path) v2.Plugin {
 	return v2.Plugin{
 		Name:      Name,
 		Stability: feature.Experimental,
@@ -33,6 +33,7 @@ func Plugin(logger *logp.Logger, p *paths.Path) v2.Plugin {
 		Doc:       "Collect identity assets for Entity Analytics",
 		Manager: &manager{
 			logger: logger,
+			store:  store, // For agentless ES-backed state (session 7).
 			path:   p,
 		},
 	}
@@ -41,14 +42,17 @@ func Plugin(logger *logp.Logger, p *paths.Path) v2.Plugin {
 // manager implements the v2.InputManager interface.
 type manager struct {
 	logger   *logp.Logger
+	store    statestore.States
 	provider provider.Provider
 	path     *paths.Path
 }
 
-// Init is not used for this input. It is called before Create and no provider
-// has been configured yet.
-func (m *manager) Init(grp unison.Group) error {
-	return nil
+// Close releases resources held by the provider, if one was configured.
+func (m *manager) Close() {
+	if m.provider != nil {
+		m.provider.Close()
+		m.provider = nil
+	}
 }
 
 // Create will unpack the provided configuration and set up the identity provider
@@ -57,6 +61,10 @@ func (m *manager) Create(cfg *config.C) (v2.Input, error) {
 	var c conf
 	if err := cfg.Unpack(&c); err != nil {
 		return nil, fmt.Errorf("unable to unpack %s input config: %w", Name, err)
+	}
+
+	if c.UseMinimalState {
+		return m.createMinimalStateInput(cfg, &c)
 	}
 
 	factoryFn, err := provider.Get(c.Provider)
@@ -70,4 +78,26 @@ func (m *manager) Create(cfg *config.C) (v2.Input, error) {
 	}
 
 	return m.provider.Create(cfg)
+}
+
+func (m *manager) createMinimalStateInput(cfg *config.C, c *conf) (v2.Input, error) {
+	factoryFn, err := provider.GetMinimalStateProvider(c.Provider)
+	if err != nil {
+		return nil, fmt.Errorf("provider %q does not support minimal state mode: %w", c.Provider, err)
+	}
+
+	p, fullSync, incrSync, err := factoryFn(cfg, m.logger)
+	if err != nil {
+		return nil, fmt.Errorf("unable to create minimal-state provider %q: %w", c.Provider, err)
+	}
+
+	return &minimalStateInput{
+		provider:         p,
+		providerName:     c.Provider,
+		fullSyncInterval: fullSync,
+		incrSyncInterval: incrSync,
+		logger:           m.logger,
+		store:            m.store,
+		path:             m.path,
+	}, nil
 }

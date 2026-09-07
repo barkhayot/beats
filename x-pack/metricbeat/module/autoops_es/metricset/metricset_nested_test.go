@@ -3,7 +3,6 @@
 // you may not use this file except in compliance with the Elastic License.
 
 //go:build !integration
-// +build !integration
 
 package metricset
 
@@ -48,7 +47,7 @@ func nestedEventsMapping(m *elasticsearch.MetricSet, r mb.ReporterV2, info *util
 			return err
 		}
 
-		r.Event(events.CreateEventWithRandomTransactionId(info, parsed))
+		r.Event(events.CreateEventWithoutTransactionId(info, parsed))
 	}
 
 	return nil

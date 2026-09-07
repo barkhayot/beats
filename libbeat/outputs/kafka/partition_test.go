@@ -40,8 +40,8 @@ import (
 type partTestScenario func(*testing.T, bool, sarama.Partitioner) error
 
 func TestPartitioners(t *testing.T) {
-	type obj map[string]interface{}
-	type arr []interface{}
+	type obj map[string]any
+	type arr []any
 
 	nonHashScenarios := []partTestScenario{
 		partTestSimple(100, false),
@@ -366,7 +366,7 @@ var hash2PartitionTests = []struct {
 func TestHash2Partition(t *testing.T) {
 	for _, tt := range hash2PartitionTests {
 		t.Run(tt.testName, func(t *testing.T) {
-			var partition, _ = hash2Partition(tt.hash, tt.numPartitions)
+			var partition = Hash2Partition(tt.hash, tt.numPartitions)
 			assert.Equal(t, tt.expectedResult, partition)
 		})
 	}

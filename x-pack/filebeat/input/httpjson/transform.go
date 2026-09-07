@@ -45,24 +45,6 @@ func (ctx *transformContext) cursorMap() mapstr.M {
 	return ctx.cursor.clone()
 }
 
-func (ctx *transformContext) lastEventClone() *mapstr.M {
-	clone := ctx.lastEvent.Clone()
-	return &clone
-}
-
-func (ctx *transformContext) firstEventClone() *mapstr.M {
-	clone := ctx.firstEvent.Clone()
-	return &clone
-}
-
-func (ctx *transformContext) firstResponseClone() *response {
-	return ctx.firstResponse.clone()
-}
-
-func (ctx *transformContext) lastResponseClone() *response {
-	return ctx.lastResponse.clone()
-}
-
 func (ctx *transformContext) updateCursor() {
 	// we do not want to pass the cursor data to itself
 	newCtx := emptyTransformContext()
@@ -113,11 +95,11 @@ func (tr transformable) access() mapstr.M {
 	return mapstr.M(tr)
 }
 
-func (tr transformable) Put(k string, v interface{}) {
+func (tr transformable) Put(k string, v any) {
 	_, _ = tr.access().Put(k, v)
 }
 
-func (tr transformable) GetValue(k string) (interface{}, error) {
+func (tr transformable) GetValue(k string) (any, error) {
 	return tr.access().GetValue(k)
 }
 
@@ -265,14 +247,14 @@ func newValueType(s string) (valueType, error) {
 	}
 }
 
-func (vt valueType) convertToType(v string) (interface{}, error) {
+func (vt valueType) convertToType(v string) (any, error) {
 	switch vt {
 	case valueTypeString:
 		return v, nil
 	case valueTypeInt:
 		return strconv.ParseInt(v, 10, 64)
 	case valueTypeJSON:
-		var o interface{}
+		var o any
 		if err := json.Unmarshal([]byte(v), &o); err != nil {
 			return nil, err
 		}

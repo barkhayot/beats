@@ -3,7 +3,6 @@
 // you may not use this file except in compliance with the Elastic License.
 
 //go:build !integration
-// +build !integration
 
 package events
 
@@ -233,7 +232,7 @@ func TestLogAndSendErrorEventWithoutClusterInfoDefaultValues(t *testing.T) {
 		require.Equal(t, http.MethodGet, auto_ops_testing.GetObjectValue(httpField, "request.method"))
 		require.Equal(t, 0, auto_ops_testing.GetObjectValue(httpField, "response.status_code"))
 
-		assert.NotEmpty(t, auto_ops_testing.GetObjectValue(event.ModuleFields, "transaction_id"))
+		assert.Nil(t, auto_ops_testing.GetObjectValue(event.ModuleFields, "transaction_id"))
 
 		return true
 	}))
@@ -269,7 +268,7 @@ func TestLogAndSendErrorEventWithoutClusterInfoNonDefaultValues(t *testing.T) {
 		assert.Equal(t, http.MethodGet, auto_ops_testing.GetObjectValue(httpField, "request.method"))
 		assert.Equal(t, 500, auto_ops_testing.GetObjectValue(httpField, "response.status_code"))
 
-		assert.NotEmpty(t, auto_ops_testing.GetObjectValue(event.ModuleFields, "transaction_id"))
+		assert.Nil(t, auto_ops_testing.GetObjectValue(event.ModuleFields, "transaction_id"))
 
 		return true
 	}))

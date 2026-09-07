@@ -69,10 +69,15 @@ func (r EncoderReader) Next() (reader.Message, error) {
 		Ts:      time.Now(),
 		Content: bytes.TrimPrefix(c, []byte("\uFEFF")),
 		Bytes:   sz,
-		Fields:  mapstr.M{},
+		Fields:  make(mapstr.M, 1),
 	}, err
 }
 
 func (r EncoderReader) Close() error {
 	return r.reader.Close()
+}
+
+// SetReadDeadline delegates to the underlying line reader (see reader.DeadlineSetter).
+func (r EncoderReader) SetReadDeadline(t time.Time) bool {
+	return r.reader.SetReadDeadline(t)
 }

@@ -109,8 +109,12 @@ func PythonUnitTest() error {
 	return devtools.PythonTest(args)
 }
 
-// BuildSystemTestBinary build a system test binary depending on the runner.
+// BuildSystemTestBinary builds a binary instrumented for use with Python system tests.
+// Deprecated: For Go integration tests only. The test binary is now built automatically via TestMain.
 func BuildSystemTestBinary() error {
+	fmt.Println("WARNING: BuildSystemTestBinary is deprecated for Go integration tests only. " +
+		"The test binary is now built automatically via TestMain. " +
+		"This target remains required for Python system tests.")
 	var opts []testbin.Option
 	// On Windows 7 32-bit we run out of memory if we enable DWARF.
 	if isWindows32bitRunner() {
@@ -201,7 +205,21 @@ func configYML() error {
 func Update() {
 	mg.SerialDeps(Fields, Dashboards, Config,
 		metricbeat.PrepareModulePackagingXPack,
-		devtools.GenerateModuleIncludeListGo)
+		generateModuleIncludeListGo)
+}
+
+func generateModuleIncludeListGo() error {
+	options := devtools.DefaultIncludeListOptions()
+	options.BuildTags = "\n//go:build !securityonly\n"
+	if err := devtools.GenerateIncludeListGo(options); err != nil {
+		return err
+	}
+	// generate include/list_securityonly.go
+	return devtools.GenerateIncludeListGo(devtools.IncludeListOptions{
+		Outfile:   "include/list_securityonly.go",
+		BuildTags: "\n//go:build securityonly\n",
+		Pkg:       "include",
+	})
 }
 
 // IntegTest executes integration tests (it uses Docker to run the tests).

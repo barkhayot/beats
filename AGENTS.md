@@ -36,18 +36,16 @@ cd filebeat  # or any beat directory
 go test -v -race -run TestName ./path/to/package/...
 
 # Stress test to find flaky tests (runs a test repeatedly with x/tools/cmd/stress)
-script/stresstest.sh [--tags integration] [--race] ./path/to/package ^TestName$ -p 32
+# It runs FOREVER (stress -timeout is per-run, not total); bound it with an outer `timeout`.
+timeout 5m script/stresstest.sh [--tags integration] [--race] ./path/to/package ^TestName$ -p 32 [-failfast]
 ```
 
 ### Integration Tests
 
-Integration tests require building the test binary and some need external dependencies
-that can be started with mage or manually.
+Integration tests may need external dependencies that can be started with mage
+or manually. The Go test binary is built automatically via `TestMain`.
 
 ```bash
-# Build the system test binary if the beat defines it
-mage buildSystemTestBinary
-
 # Run integration tests for a specific package
 go test -v -race -run TestName -tags integration ./path/to/package/...
 ```
@@ -77,8 +75,8 @@ make check                   # Full check suite (lint, headers, go mod, python)
 ### Linting
 
 ```bash
-# Running golangci-lint for the whole codebase is slow, prefer running only on changed files by default
-golangci-lint run --max-issues-per-linter 0 --max-same-issues 0 --whole-files --new-from-merge-base upstream/main
+# Running golangci-lint for the whole codebase is slow, prefer running only on changed lines by default.
+golangci-lint run --max-issues-per-linter 0 --max-same-issues 0 --new-from-merge-base upstream/main
 ```
 
 ## Architecture
@@ -138,18 +136,7 @@ When referencing code, always use exact locations and names:
 
 ## Changelog
 
-PRs require a changelog fragment in `changelog/fragments/` (CI enforced unless `skip-changelog` label is applied). Create using `elastic-agent-changelog-tool`:
-
-```bash
-go run github.com/elastic/elastic-agent-changelog-tool@latest new --component <beat> --kind <kind>
-```
-
-Fragment format (`changelog/fragments/<timestamp>-<slug>.yaml`):
-```yaml
-kind: bug-fix          # bug-fix, enhancement, breaking-change, deprecation, known-issue
-summary: Short description of the change
-component: filebeat    # the affected beat/component
-```
+If the change is user-visible (not tests, CI, refactoring, or docs), add a changelog fragment: run `go run github.com/elastic/elastic-agent-changelog-tool@latest new` and edit the emitted fragment following the instructions in its comments. Otherwise, add the `skip-changelog` label to the PR.
 
 ## Commits and PRs
 

@@ -69,7 +69,7 @@ Kubernetes API server metrics
 
 
 **`kubernetes.apiserver.request.dry_run`**
-:   Wether the request uses dry run
+:   Whether the request uses dry run
 
     type: keyword
 
@@ -1502,6 +1502,12 @@ kubernetes container metrics
 
 **`kubernetes.container.id`**
 :   Container id
+
+    type: keyword
+
+
+**`kubernetes.container.type`**
+:   Container type (container or init)
 
     type: keyword
 

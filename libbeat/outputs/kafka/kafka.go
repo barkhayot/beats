@@ -20,14 +20,15 @@ package kafka
 import (
 	"fmt"
 
+	"go.uber.org/zap"
+
 	"github.com/elastic/beats/v7/libbeat/beat"
+	"github.com/elastic/beats/v7/libbeat/common/kafka"
 	"github.com/elastic/beats/v7/libbeat/outputs"
 	"github.com/elastic/beats/v7/libbeat/outputs/codec"
 	"github.com/elastic/beats/v7/libbeat/outputs/outil"
 	"github.com/elastic/elastic-agent-libs/config"
 	"github.com/elastic/elastic-agent-libs/logp"
-	"github.com/elastic/elastic-agent-libs/paths"
-	"github.com/elastic/sarama"
 )
 
 const (
@@ -43,10 +44,9 @@ func makeKafka(
 	beat beat.Info,
 	observer outputs.Observer,
 	cfg *config.C,
-	beatPaths *paths.Path,
 ) (outputs.Group, error) {
 	log := beat.Logger.Named(logSelector)
-	sarama.Logger = kafkaLogger{log: log}
+	kafka.SetSaramaLogger(log.WithOptions(zap.AddCallerSkip(1)))
 
 	log.Debug("initialize kafka output")
 
@@ -84,7 +84,7 @@ func makeKafka(
 	if kConfig.MaxRetries < 0 {
 		retry = -1
 	}
-	return outputs.Success(kConfig.Queue, kConfig.BulkMaxSize, retry, nil, beat.Logger, beatPaths, client)
+	return outputs.Success(kConfig.Queue, kConfig.BulkMaxSize, retry, nil, beat.Logger, beat.Paths, client)
 }
 
 // buildTopicSelector builds the topic selector for standalone Beat and when

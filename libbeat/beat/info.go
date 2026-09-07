@@ -18,6 +18,8 @@
 package beat
 
 import (
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofrs/uuid/v5"
@@ -26,6 +28,27 @@ import (
 	"github.com/elastic/elastic-agent-libs/logp"
 	"github.com/elastic/elastic-agent-libs/paths"
 )
+
+var hostnameOverride atomic.Pointer[string]
+
+// SetHostnameOverride sets the process-wide hostname override.
+// The value is trimmed; casing is preserved. Pass "" to clear.
+func SetHostnameOverride(h string) {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		hostnameOverride.Store(nil)
+		return
+	}
+	hostnameOverride.Store(&h)
+}
+
+// GetHostnameOverride returns the active hostname override, or "" if none is set.
+func GetHostnameOverride() string {
+	if h := hostnameOverride.Load(); h != nil {
+		return *h
+	}
+	return ""
+}
 
 // Info stores a beats instance meta data.
 type Info struct {
@@ -43,10 +66,11 @@ type Info struct {
 	UserAgent        string    // A string of the user-agent that can be passed to any outputs or network connections
 	FIPSDistribution bool      // If the beat was compiled as a FIPS distribution.
 
-	LogConsumer consumer.Logs // otel log consumer
-	ComponentID string        // otel component id from the collector config e.g. "filebeatreceiver/logs"
-	Logger      *logp.Logger
-	Paths       *paths.Path // per beat paths definition
+	LogConsumer     consumer.Logs // otel log consumer
+	ComponentID     string        // otel component id from the collector config e.g. "filebeatreceiver/logs"
+	IncludeMetadata bool          // when true, otelconsumer includes @metadata in the log record body
+	Logger          *logp.Logger
+	Paths           *paths.Path // per beat paths definition
 }
 
 func (i Info) FQDNAwareHostname(useFQDN bool) string {

@@ -3,7 +3,6 @@
 // you may not use this file except in compliance with the Elastic License.
 
 //go:build !integration
-// +build !integration
 
 package auto_ops_testing
 
@@ -16,7 +15,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gofrs/uuid/v5"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elastic/beats/v7/metricbeat/mb"
@@ -36,7 +34,7 @@ type GlobCallback func(t *testing.T, file string, version string, data []byte)
 type SetupServerCallback func(t *testing.T, clusterInfo []byte, data []byte, version string) (server *httptest.Server)
 
 // The config setup for the MetricSet
-type SetupConfigCallback func(server *httptest.Server) (config map[string]interface{})
+type SetupConfigCallback func(server *httptest.Server) (config map[string]any)
 
 type GetTemplateCallback func(t *testing.T, names []string, ignoreNames []string) []byte
 
@@ -48,8 +46,8 @@ func ExtractVersionFromFile(file string) (version string) {
 
 // Helper function to automatically use the server's URL and just the name as the metricset.
 func UseNamedMetricSet(name string) SetupConfigCallback {
-	return func(server *httptest.Server) map[string]interface{} {
-		return map[string]interface{}{
+	return func(server *httptest.Server) map[string]any {
+		return map[string]any{
 			"module":     "autoops_es",
 			"metricsets": []string{name},
 			"hosts":      []string{server.URL},
@@ -175,7 +173,7 @@ func CreateClusterInfo(clusterVersion string) utils.ClusterInfo {
 }
 
 // Unravel `mapstr.M.GetValue` without an error response to make it easier to assert
-func GetObjectValue(obj mapstr.M, key string) interface{} {
+func GetObjectValue(obj mapstr.M, key string) any {
 	exists, err := obj.HasKey(key)
 
 	if !exists {
@@ -209,7 +207,7 @@ func GetObjectAsString(t *testing.T, obj mapstr.M, key string) string {
 }
 
 // Unravel `mapstr.M.GetValue` and `mapstr.M.String` without an error response to make it easier to assert
-func GetObjectAsJson(obj mapstr.M, key string) interface{} {
+func GetObjectAsJson(obj mapstr.M, key string) any {
 	exists, err := obj.HasKey(key)
 
 	if err != nil {
@@ -267,12 +265,10 @@ func CheckEventWithTransactionId(t *testing.T, event mb.Event, info utils.Cluste
 	require.Equal(t, transactionId, GetObjectValue(event.ModuleFields, "transaction_id"))
 }
 
-func CheckEventWithRandomTransactionId(t *testing.T, event mb.Event, info utils.ClusterInfo) {
+func CheckEventWithoutTransactionId(t *testing.T, event mb.Event, info utils.ClusterInfo) {
 	CheckEvent(t, event, info)
 
-	// valid, random UUID
-	_, err := uuid.FromString(GetObjectValue(event.ModuleFields, "transaction_id").(string))
-	require.NoError(t, err)
+	require.Nil(t, GetObjectValue(event.ModuleFields, "transaction_id"))
 }
 
 func CheckAllEventsUseSameTransactionId(t *testing.T, events []mb.Event) {

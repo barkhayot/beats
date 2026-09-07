@@ -57,6 +57,8 @@ func (m *mockOsqueryd) DataPath() string {
 	return "/tmp/test-osquery-data"
 }
 
+func (m *mockOsqueryd) SetExtensions(paths []string, timeout int, require []string) {}
+
 type statusEvent struct {
 	Status  status.Status
 	Message string
@@ -72,11 +74,11 @@ type testManager struct {
 }
 
 type diagnosticsQueryExecutor struct {
-	rows []map[string]interface{}
+	rows []map[string]any
 	err  error
 }
 
-func (e *diagnosticsQueryExecutor) Query(context.Context, string, time.Duration) ([]map[string]interface{}, error) {
+func (e *diagnosticsQueryExecutor) Query(context.Context, string, time.Duration) ([]map[string]any, error) {
 	return e.rows, e.err
 }
 
@@ -111,6 +113,7 @@ func newStatusTestBeater(t *testing.T, overrides ...func(*osquerybeat)) (*osquer
 
 	mgr := &testManager{}
 	b := &beat.Beat{
+		Info:       beat.Info{Logger: logp.NewLogger("test")},
 		Manager:    mgr,
 		Registry:   reload.NewRegistry(),
 		Monitoring: beatmonitoring.NewMonitoring(),
@@ -134,6 +137,7 @@ func newStatusTestBeater(t *testing.T, overrides ...func(*osquerybeat)) (*osquer
 func TestOsquerybeatStatusReporting_Lifecycle(t *testing.T) {
 	mgr := &testManager{}
 	b := &beat.Beat{
+		Info:       beat.Info{Logger: logp.NewLogger("test")},
 		Manager:    mgr,
 		Registry:   reload.NewRegistry(),
 		Monitoring: beatmonitoring.NewMonitoring(),
@@ -254,6 +258,7 @@ func newTestBeatPaths(t *testing.T) *paths.Path {
 func TestOsquerybeatStatusReporting_CheckFailure(t *testing.T) {
 	mgr := &testManager{}
 	b := &beat.Beat{
+		Info:       beat.Info{Logger: logp.NewLogger("test")},
 		Manager:    mgr,
 		Registry:   reload.NewRegistry(),
 		Monitoring: beatmonitoring.NewMonitoring(),
@@ -292,6 +297,7 @@ func TestOsquerybeatStatusReporting_CheckFailure(t *testing.T) {
 func TestOsquerybeatStatusReporting_CreateOsquerydFailure(t *testing.T) {
 	mgr := &testManager{}
 	b := &beat.Beat{
+		Info:       beat.Info{Logger: logp.NewLogger("test")},
 		Manager:    mgr,
 		Registry:   reload.NewRegistry(),
 		Monitoring: beatmonitoring.NewMonitoring(),
@@ -330,6 +336,7 @@ func TestOsquerybeatStatusReporting_ManagerStartFailure(t *testing.T) {
 		startErr: assert.AnError, // Manager.Start() will fail
 	}
 	b := &beat.Beat{
+		Info:       beat.Info{Logger: logp.NewLogger("test")},
 		Manager:    mgr,
 		Registry:   reload.NewRegistry(),
 		Monitoring: beatmonitoring.NewMonitoring(),
@@ -371,7 +378,7 @@ func TestOsquerybeatRegistersScheduledProfilesDiagnostics(t *testing.T) {
 		qp: newQueryProfiler(logp.NewLogger("test")),
 	}
 	ob.setDiagnosticsQueryExecutor(&diagnosticsQueryExecutor{
-		rows: []map[string]interface{}{
+		rows: []map[string]any{
 			{
 				"name":              "pack_test_query",
 				"query":             "select * from users limit 1",
@@ -395,7 +402,7 @@ func TestOsquerybeatRegistersScheduledProfilesDiagnostics(t *testing.T) {
 	hook, ok := mgr.diagHook["scheduled_query_profiles"]
 	require.True(t, ok, "expected scheduled profiles diagnostics hook")
 
-	var payload map[string]interface{}
+	var payload map[string]any
 	err := json.Unmarshal(hook(), &payload)
 	require.NoError(t, err)
 
@@ -404,11 +411,11 @@ func TestOsquerybeatRegistersScheduledProfilesDiagnostics(t *testing.T) {
 	//nolint:testifylint // We're comparing integers from a JSON
 	assert.Equal(t, float64(1), count)
 
-	profiles, ok := payload["osquery_schedule"].([]interface{})
+	profiles, ok := payload["osquery_schedule"].([]any)
 	require.True(t, ok)
 	require.Len(t, profiles, 1)
 
-	p0, ok := profiles[0].(map[string]interface{})
+	p0, ok := profiles[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "select * from users limit 1", p0["query"])
 
@@ -417,7 +424,7 @@ func TestOsquerybeatRegistersScheduledProfilesDiagnostics(t *testing.T) {
 	//nolint:testifylint // We're comparing integers from a JSON
 	assert.Equal(t, float64(0), liveCount)
 
-	liveProfiles, ok := payload["live_query_profiles"].([]interface{})
+	liveProfiles, ok := payload["live_query_profiles"].([]any)
 	require.True(t, ok)
 	assert.Empty(t, liveProfiles)
 }

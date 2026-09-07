@@ -22,6 +22,7 @@ package integration
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -32,10 +33,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
 	"github.com/gofrs/uuid/v5"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -50,7 +50,7 @@ import (
 
 	"github.com/elastic/beats/v7/libbeat/tests/integration"
 	"github.com/elastic/beats/v7/libbeat/version"
-	"github.com/elastic/elastic-agent-autodiscover/docker"
+	"github.com/elastic/beats/v7/pkg/autodiscover/docker"
 	"github.com/elastic/elastic-agent-libs/logp"
 	"github.com/elastic/elastic-agent-libs/testing/fs"
 )
@@ -108,6 +108,76 @@ func TestHintsKubernetes(t *testing.T) {
 		),
 		30*time.Second,
 		"Filestream did not start for the test container")
+}
+
+func TestHintsKubernetesInputAllowList(t *testing.T) {
+	filebeat := integration.NewBeat(
+		t,
+		"filebeat",
+		"../../filebeat.test",
+	)
+
+	kubeConfigPath, _ := createKindCluster(t, filebeat.TempDir())
+	nodeName, _, filestreamContainerID := startFlogKubernetes(t, kubeConfigPath)
+	startFlogKubernetesWithAnnotations(
+		t,
+		kubeConfigPath,
+		map[string]string{
+			"co.elastic.logs/raw": `[{"type":"httpjson","id":"disallowed-httpjson"}]`,
+		},
+	)
+
+	cfgYAML := getConfig(
+		t,
+		map[string]any{
+			"kubeConfig": kubeConfigPath,
+			"nodeName":   nodeName,
+		},
+		"autodiscover",
+		"k8s-input-allow-list.yml")
+	filebeat.WriteConfigFile(cfgYAML)
+	filebeat.Start()
+
+	const (
+		rejectionLogPrefix = "Rejecting autodiscover hints configuration."
+		rejectionMessage   = `Rejecting autodiscover hints configuration. ` +
+			`input.type: httpjson, reason: disallowed input type, allowed ` +
+			`inputs are: log filestream container`
+	)
+	filestreamStart := fmt.Sprintf(
+		`"message":"Input 'filestream' starting","service.name":"filebeat","id":"container-logs-%s"`,
+		filestreamContainerID,
+	)
+
+	// The other pods in the K8s cluster will start Filestream inputs because
+	// this is the default config, so we ensure they start and httpjson is rejected.
+	filebeat.WaitLogsContainsAnyOrder(
+		[]string{filestreamStart, rejectionLogPrefix},
+		30*time.Second,
+		"default filestream input did not start or httpjson raw hints configuration was not rejected",
+	)
+
+	warningLine := filebeat.GetLogLine(rejectionLogPrefix)
+	require.NotEmpty(t, warningLine, "rejection warning log line should be available from the beginning of the logs")
+
+	var warning map[string]any
+	require.NoError(t, json.Unmarshal([]byte(warningLine), &warning), "log entries must be valid JSON")
+	assert.Equal(t, "warn", warning["log.level"], "rejection should be logged at warning level")
+	assert.Equal(t, rejectionMessage, warning["message"], "rejection warning should describe the rejected input")
+
+	// Stop Filebeat after the rejection has been observed so all logs produced
+	// while processing the annotated pod can be checked deterministically.
+	filebeat.Stop()
+	assert.Empty(
+		t,
+		filebeat.GetLogLine("Input 'httpjson' starting"),
+		"the rejected httpjson input should not start",
+	)
+	assert.Empty(
+		t,
+		filebeat.GetLogLine("Auto discover config check failed for config"),
+		"the rejected configuration should be filtered before CheckConfig",
+	)
 }
 
 func TestAutodiscoverFilestreamTakeOverDoesNotReingest(t *testing.T) {
@@ -313,13 +383,22 @@ func createKindCluster(
 }
 
 func startFlogKubernetes(t *testing.T, kubeConfigPath string) (nodeName, podName, containerID string) {
+	return startFlogKubernetesWithAnnotations(t, kubeConfigPath, nil)
+}
+
+func startFlogKubernetesWithAnnotations(
+	t *testing.T,
+	kubeConfigPath string,
+	annotations map[string]string,
+) (nodeName, podName, containerID string) {
 	clientset := newK8sClientsetFromKubeConfigPath(t, kubeConfigPath)
 
 	podName = "flog-pod-" + uuid.Must(uuid.NewV4()).String()
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: "default",
+			Name:        podName,
+			Namespace:   "default",
+			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
@@ -394,7 +473,7 @@ func startFlogDocker(t *testing.T) string {
 	}
 
 	// Pull the image first
-	reader, err := cli.ImagePull(ctx, img, image.PullOptions{})
+	reader, err := cli.ImagePull(ctx, img, client.ImagePullOptions{})
 	if err != nil {
 		t.Fatalf("cannot pull image %q: %s", img, err)
 	}
@@ -408,25 +487,27 @@ func startFlogDocker(t *testing.T) string {
 
 	resp, err := cli.ContainerCreate(
 		ctx,
-		&container.Config{
-			Image: img,
-			Cmd:   []string{"-l", "-d", "1", "-s", "1"},
-		}, nil, nil, nil, "")
+		client.ContainerCreateOptions{
+			Config: &container.Config{
+				Image: img,
+				Cmd:   []string{"-l", "-d", "1", "-s", "1"},
+			},
+		})
 	if err != nil {
 		t.Fatalf("cannot create container for %q: %s", img, err)
 	}
 
-	err = cli.ContainerStart(ctx, resp.ID, container.StartOptions{})
+	_, err = cli.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{})
 	if err != nil {
 		t.Fatalf("cannot start container: %s", err)
 	}
 
 	t.Cleanup(func() {
 		ctx := context.Background()
-		if err := cli.ContainerStop(ctx, resp.ID, container.StopOptions{}); err != nil {
+		if _, err := cli.ContainerStop(ctx, resp.ID, client.ContainerStopOptions{}); err != nil {
 			t.Errorf("cannot stop container: %s", err)
 		}
-		if err := cli.ContainerRemove(ctx, resp.ID, container.RemoveOptions{}); err != nil {
+		if _, err := cli.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{}); err != nil {
 			t.Errorf("cannot remove container: %s", err)
 		}
 	})
@@ -485,15 +566,15 @@ func kindNodeGatewayIP(t *testing.T, nodeName string) string {
 		t.Fatalf("cannot create Docker client: %s", err)
 	}
 
-	inspect, err := cli.ContainerInspect(context.Background(), nodeName)
+	inspectResult, err := cli.ContainerInspect(context.Background(), nodeName, client.ContainerInspectOptions{})
 	if err != nil {
 		t.Fatalf("cannot inspect Kind node %q: %s", nodeName, err)
 	}
 
-	if inspect.NetworkSettings != nil {
-		for _, networkSettings := range inspect.NetworkSettings.Networks {
-			if networkSettings != nil && networkSettings.Gateway != "" {
-				return networkSettings.Gateway
+	if inspectResult.Container.NetworkSettings != nil {
+		for _, networkSettings := range inspectResult.Container.NetworkSettings.Networks {
+			if networkSettings != nil && networkSettings.Gateway.IsValid() {
+				return networkSettings.Gateway.String()
 			}
 		}
 	}

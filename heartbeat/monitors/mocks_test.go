@@ -18,6 +18,7 @@
 package monitors
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elastic/elastic-agent-libs/config"
+	"github.com/elastic/elastic-agent-libs/logp/logptest"
 	"github.com/elastic/elastic-agent-libs/mapstr"
 	"github.com/elastic/elastic-agent-libs/monitoring"
 	"github.com/elastic/go-lookslike"
@@ -46,7 +48,8 @@ import (
 	beatversion "github.com/elastic/beats/v7/libbeat/version"
 )
 
-func makeMockFactory(pluginsReg *plugin.PluginsReg) (factory *RunnerFactory, sched *scheduler.Scheduler, close func()) {
+func makeMockFactory(t *testing.T, pluginsReg *plugin.PluginsReg) (factory *RunnerFactory, sched *scheduler.Scheduler, close func()) {
+	t.Helper()
 	id, _ := uuid.NewV4()
 	eid, _ := uuid.NewV4()
 	info := beat.Info{
@@ -60,6 +63,7 @@ func makeMockFactory(pluginsReg *plugin.PluginsReg) (factory *RunnerFactory, sch
 		EphemeralID:     eid,
 		FirstStart:      time.Now(),
 		StartTime:       time.Now(),
+		Logger:          logptest.NewTestingLogger(t, ""),
 	}
 
 	sched = scheduler.Create(
@@ -68,6 +72,7 @@ func makeMockFactory(pluginsReg *plugin.PluginsReg) (factory *RunnerFactory, sch
 		time.Local,
 		nil,
 		true,
+		logptest.NewTestingLogger(t, ""),
 	)
 	return NewFactory(FactoryParams{
 			BeatInfo:    info,
@@ -157,6 +162,16 @@ func (pc *MockPipeline) ConnectWith(cc beat.ClientConfig) (beat.Client, error) {
 	return c, nil
 }
 
+func (pc *MockPipeline) Disconnect(ctx context.Context) error {
+	pc.mtx.Lock()
+	defer pc.mtx.Unlock()
+
+	for _, c := range pc.Clients {
+		c.Close()
+	}
+
+	return nil
+}
 func (pc *MockPipeline) PublishedEvents() []*beat.Event {
 	pc.mtx.Lock()
 	defer pc.mtx.Unlock()
@@ -176,8 +191,8 @@ func baseMockEventMonitorValidator(id string, name string, status string) valida
 	} else {
 		idMatcher = isdef.IsEqual(id)
 	}
-	return lookslike.MustCompile(map[string]interface{}{
-		"monitor": map[string]interface{}{
+	return lookslike.MustCompile(map[string]any{
+		"monitor": map[string]any{
 			"id":          idMatcher,
 			"name":        name,
 			"type":        "test",
@@ -198,7 +213,7 @@ func mockEventMonitorValidator(id string, name string) validator.Validator {
 	))
 }
 
-func mockEventCustomFields() map[string]interface{} {
+func mockEventCustomFields() map[string]any {
 	return mapstr.M{"foo": "bar"}
 }
 
@@ -220,7 +235,7 @@ func mockPluginBuilder() (plugin.PluginFactory, *atomic.Int64, *atomic.Int64) {
 	return plugin.PluginFactory{
 			Name:    "test",
 			Aliases: []string{"testAlias"},
-			Make: func(s string, config *config.C) (plugin.Plugin, error) {
+			Make: func(s string, config *config.C, info beat.Info) (plugin.Plugin, error) {
 				built.Add(1)
 				// Declare a real config block with a required attr so we can see what happens when it doesn't work
 				unpacked := struct {
@@ -235,11 +250,11 @@ func mockPluginBuilder() (plugin.PluginFactory, *atomic.Int64, *atomic.Int64) {
 
 				err := config.Unpack(&unpacked)
 				if err != nil {
-					return plugin.Plugin{DoClose: closer}, err
+					return plugin.Plugin{DoClose: closer, Logger: info.Logger}, err
 				}
 				j := createMockJob()
 
-				return plugin.Plugin{Jobs: j, DoClose: closer, Endpoints: 1}, nil
+				return plugin.Plugin{Jobs: j, DoClose: closer, Endpoints: 1, Logger: info.Logger}, nil
 			},
 			Stats: plugin.NewPluginCountersRecorder("test", reg),
 		},
@@ -255,7 +270,7 @@ func mockPluginsReg() (p *plugin.PluginsReg, built *atomic.Int64, closed *atomic
 }
 
 func mockPluginConf(t *testing.T, id string, name string, schedule string, url string) *config.C {
-	confMap := map[string]interface{}{
+	confMap := map[string]any{
 		"type":     "test",
 		"urls":     []string{url},
 		"schedule": schedule,
@@ -276,7 +291,7 @@ func mockPluginConf(t *testing.T, id string, name string, schedule string, url s
 // mockBadPluginConf returns a conf with an invalid plugin config.
 // This should fail after the generic plugin checks fail since the HTTP plugin requires 'urls' to be set.
 func mockBadPluginConf(t *testing.T, id string) *config.C {
-	confMap := map[string]interface{}{
+	confMap := map[string]any{
 		"type":        "test",
 		"notanoption": []string{"foo"},
 	}
@@ -292,7 +307,7 @@ func mockBadPluginConf(t *testing.T, id string) *config.C {
 }
 
 func mockInvalidPluginConf(t *testing.T) *config.C {
-	confMap := map[string]interface{}{
+	confMap := map[string]any{
 		"hoeutnheou": "oueanthoue",
 	}
 
@@ -303,7 +318,7 @@ func mockInvalidPluginConf(t *testing.T) *config.C {
 }
 
 func mockInvalidPluginConfWithStdFields(t *testing.T, id string, name string, schedule string) *config.C {
-	confMap := map[string]interface{}{
+	confMap := map[string]any{
 		"type":     "test",
 		"id":       id,
 		"name":     name,

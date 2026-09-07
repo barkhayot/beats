@@ -21,6 +21,7 @@ package filestream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,7 +46,6 @@ import (
 	"github.com/elastic/beats/v7/libbeat/statestore/storetest"
 	conf "github.com/elastic/elastic-agent-libs/config"
 	"github.com/elastic/elastic-agent-libs/logp/logptest"
-	"github.com/elastic/go-concert/unison"
 )
 
 type inputTestingEnvironment struct {
@@ -53,14 +53,14 @@ type inputTestingEnvironment struct {
 	t          *testing.T
 	workingDir string
 	stateStore statestore.States
+
 	pipeline   *mockPipelineConnector
 	monitoring beatmonitoring.Monitoring
 
 	pluginInitOnce sync.Once
 	plugin         v2.Plugin
 
-	wg  sync.WaitGroup
-	grp unison.TaskGroup
+	wg sync.WaitGroup
 }
 
 type registryEntry struct {
@@ -88,9 +88,7 @@ func newInputTestingEnvironment(t *testing.T) *inputTestingEnvironment {
 
 func (e *inputTestingEnvironment) mustCreateInput(config map[string]any) v2.Input {
 	e.t.Helper()
-	e.grp = unison.TaskGroup{}
 	manager := e.getManager()
-	_ = manager.Init(&e.grp)
 	c := conf.MustNewConfigFrom(config)
 	inp, err := manager.Create(c)
 	if err != nil {
@@ -100,16 +98,9 @@ func (e *inputTestingEnvironment) mustCreateInput(config map[string]any) v2.Inpu
 }
 
 func (e *inputTestingEnvironment) createInput(config map[string]any) (v2.Input, error) {
-	e.grp = unison.TaskGroup{}
 	manager := e.getManager()
-	_ = manager.Init(&e.grp)
 	c := conf.MustNewConfigFrom(config)
-	inp, err := manager.Create(c)
-	if err != nil {
-		return nil, err
-	}
-
-	return inp, nil
+	return manager.Create(c)
 }
 
 func (e *inputTestingEnvironment) getManager() v2.InputManager {
@@ -120,11 +111,7 @@ func (e *inputTestingEnvironment) getManager() v2.InputManager {
 }
 
 func (e *inputTestingEnvironment) startInput(ctx context.Context, id string, inp v2.Input) {
-	e.wg.Add(1)
-	go func(wg *sync.WaitGroup, grp *unison.TaskGroup) {
-		defer wg.Done()
-		defer func() { _ = grp.Stop() }()
-
+	e.wg.Go(func() {
 		logger := e.testLogger.Named("metrics-registry")
 		reg := inputmon.NewMetricsRegistry(
 			id, inp.Name(), e.monitoring.InputsRegistry(), logger)
@@ -140,11 +127,13 @@ func (e *inputTestingEnvironment) startInput(ctx context.Context, id string, inp
 			Logger:          e.testLogger.Named("input.filestream"),
 		}
 		_ = inp.Run(inputCtx, e.pipeline)
-	}(&e.wg, &e.grp)
+	})
 }
 
 func (e *inputTestingEnvironment) waitUntilInputStops() {
 	e.wg.Wait()
+	//nolint:errcheck // It's a test, let it panic if the casting fails
+	e.getManager().(*loginp.InputManager).Close()
 }
 
 // mustWriteToFile writes data to file and returns the full path
@@ -208,6 +197,7 @@ func (e *inputTestingEnvironment) abspath(filename string) string {
 
 func (e *inputTestingEnvironment) requireRegistryEntryCount(expectedCount int) {
 	inputStore, _ := e.stateStore.StoreFor("")
+	defer inputStore.Close()
 
 	actual := 0
 	err := inputStore.Each(func(_ string, _ statestore.ValueDecoder) (bool, error) {
@@ -317,8 +307,8 @@ func (e *inputTestingEnvironment) waitUntilOffsetInRegistry(
 			e.t.Fatalf("could not stat '%s', err: %s", filepath, err)
 		}
 
-		fileSizeString.WriteString(fmt.Sprint(fi.Size()))
-		cursorString.WriteString(fmt.Sprint(entry.Cursor.Offset))
+		fmt.Fprint(&fileSizeString, fi.Size())
+		fmt.Fprint(&cursorString, entry.Cursor.Offset)
 
 		return entry.Cursor.Offset == expectedOffset
 	},
@@ -338,6 +328,7 @@ func (e *inputTestingEnvironment) requireNoEntryInRegistry(filename, inputID str
 	}
 
 	inputStore, _ := e.stateStore.StoreFor("")
+	defer inputStore.Close()
 	id := getIDFromPath(filepath, inputID, fi)
 
 	var entry registryEntry
@@ -359,6 +350,7 @@ func (e *inputTestingEnvironment) requireOffsetInRegistryByID(key string, expect
 
 func (e *inputTestingEnvironment) getRegistryState(key string) (registryEntry, error) {
 	inputStore, _ := e.stateStore.StoreFor("")
+	defer inputStore.Close()
 
 	var entry registryEntry
 	err := inputStore.Get(key, &entry)
@@ -368,7 +360,6 @@ func (e *inputTestingEnvironment) getRegistryState(key string) (registryEntry, e
 			keys = append(keys, key)
 			return false, nil
 		})
-		e.t.Logf("keys in store: %v", keys)
 
 		return registryEntry{},
 			fmt.Errorf("error when getting expected key '%s' from store: %w",
@@ -393,20 +384,10 @@ func getIDFromPath(filepath, inputID string, fi os.FileInfo) string {
 // waitUntilEventCount waits until total count events arrive to the client.
 func (e *inputTestingEnvironment) waitUntilEventCount(count int) {
 	e.t.Helper()
-	msg := &strings.Builder{}
-	require.Eventuallyf(e.t, func() bool {
-		msg.Reset()
-
+	require.EventuallyWithT(e.t, func(t *assert.CollectT) {
 		events := e.pipeline.GetAllEvents()
-		sum := len(events)
-		if sum == count {
-			return true
-		}
-		fmt.Fprintf(msg, "unexpected number of events; expected: %d, actual: %d\n",
-			count, sum)
-
-		return false
-	}, 2*time.Minute, 10*time.Millisecond, "%s", msg)
+		require.Len(t, events, count, "unexpected number of events")
+	}, 2*time.Minute, 10*time.Millisecond)
 }
 
 // waitUntilEventCountCtx calls waitUntilEventCount, but fails if ctx is cancelled.
@@ -492,9 +473,9 @@ func (e *inputTestingEnvironment) requireEventsReceived(events []string) {
 	}
 
 	var missingEvents []string
-	for i, found := range foundEvents {
-		if !found {
-			missingEvents = append(missingEvents, events[i])
+	for i, ev := range events {
+		if !foundEvents[i] {
+			missingEvents = append(missingEvents, ev)
 		}
 	}
 
@@ -578,6 +559,10 @@ func (s *testInputStore) StoreFor(string) (*statestore.Store, error) {
 	return s.registry.Get("filebeat")
 }
 
+func (s *testInputStore) StoreKey() string {
+	return fmt.Sprintf("test:%p", s.registry)
+}
+
 func (s *testInputStore) CleanupInterval() time.Duration {
 	return 24 * time.Hour
 }
@@ -587,8 +572,90 @@ type mockClient struct {
 	published  []beat.Event
 	ackHandler beat.EventListener
 	closed     atomic.Bool
-	mtx        sync.Mutex
-	canceler   context.CancelFunc
+	// publishingStarted is set the first time PublishAll is called. It must
+	// be readable without holding mtx because PublishAll keeps mtx while
+	// invoking ackHandler.ACKEvents, which can block (e.g. with a blocking
+	// ack handler used in TestFilestreamTruncateBlockedOutput).
+	publishingStarted atomic.Bool
+	mtx               sync.Mutex
+	// done is closed by cancel() to release a blocked ack handler. Tests call
+	// cancel either directly (via this client) or via
+	// mockPipelineConnector.cancelAllClients.
+	done       chan struct{}
+	cancelOnce sync.Once
+
+	allowedEventsSet bool          // make the zero value unblocked
+	allowedEvents    int           // Maximum number of events to accept before blocking
+	eventsAccepted   int           // Current number of events accepted
+	blocked          bool          // Whether the client is currently blocked
+	blockChan        chan struct{} // Channel to signal when blocking should be released
+}
+
+// SetAllowedEvents sets the maximum number of events the client will accept
+// before blocking.
+func (c *mockClient) SetAllowedEvents(limit int) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	c.allowedEventsSet = true
+	c.allowedEvents = limit
+	c.eventsAccepted = 0
+	c.blocked = false
+	c.blockChan = make(chan struct{}, 1)
+}
+
+// AllowMoreEvents allows the client to accept more n events.
+func (c *mockClient) AllowMoreEvents(n int) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	c.allowedEventsSet = true
+	c.allowedEvents += n
+	if c.blocked && c.eventsAccepted < c.allowedEvents {
+		c.blocked = false
+		select {
+		case c.blockChan <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// Unblock removes all event count restrictions and unblocks the client
+func (c *mockClient) Unblock() {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	c.allowedEventsSet = false
+	c.allowedEvents = 0
+
+	c.blocked = false
+	select {
+	case c.blockChan <- struct{}{}:
+	default:
+	}
+}
+
+// cancel releases a blocked ack handler. Safe to call from multiple goroutines
+// and idempotent.
+func (c *mockClient) cancel() {
+	c.cancelOnce.Do(func() { close(c.done) })
+}
+
+// waitIfBlocked acquires c.mtx.
+func (c *mockClient) waitIfBlocked() {
+	c.mtx.Lock()
+	unlock := sync.OnceFunc(func() {
+		c.mtx.Unlock()
+	})
+	defer unlock()
+
+	if c.allowedEventsSet &&
+		c.eventsAccepted >= c.allowedEvents {
+
+		c.blocked = true
+		unlock()
+		<-c.blockChan
+	}
 }
 
 // GetEvents returns the published events
@@ -606,10 +673,20 @@ func (c *mockClient) Publish(e beat.Event) {
 
 // PublishAll mocks the Client PublishAll method
 func (c *mockClient) PublishAll(events []beat.Event) {
+	c.waitIfBlocked()
+
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
+	c.eventsAccepted += len(events)
+
 	c.publishing = append(c.publishing, events...)
+	if len(events) > 0 {
+		// Only flag as started for non-empty batches so an empty PublishAll
+		// does not wake waitUntilPublishingHasStarted prematurely (preserving
+		// the pre-fix semantics of `len(c.publishing) > 0`).
+		c.publishingStarted.Store(true)
+	}
 	for _, event := range events {
 		c.ackHandler.AddEvent(event, true)
 	}
@@ -619,7 +696,7 @@ func (c *mockClient) PublishAll(events []beat.Event) {
 }
 
 func (c *mockClient) waitUntilPublishingHasStarted() {
-	for len(c.publishing) == 0 {
+	for !c.publishingStarted.Load() {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
@@ -642,6 +719,9 @@ type mockPipelineConnector struct {
 	blocking bool
 	clients  []*mockClient
 	mtx      sync.Mutex
+
+	allowedEventsSet bool // make the zero value unblocked
+	allowedEvents    int
 }
 
 // GetAllEvents returns all events associated with a pipeline
@@ -667,15 +747,33 @@ func (pc *mockPipelineConnector) ConnectWith(config beat.ClientConfig) (beat.Cli
 	pc.mtx.Lock()
 	defer pc.mtx.Unlock()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	c := &mockClient{
-		canceler:   cancel,
-		ackHandler: newMockACKHandler(ctx, pc.blocking, config),
+	c := newMockClient(pc.blocking, config)
+	pc.clients = append(pc.clients, c)
+	if pc.allowedEventsSet {
+		c.SetAllowedEvents(pc.allowedEvents)
+	}
+	return c, nil
+}
+
+func (pc *mockPipelineConnector) Disconnect(ctx context.Context) error {
+	pc.mtx.Lock()
+	defer pc.mtx.Unlock()
+
+	var err error
+	for _, c := range pc.clients {
+		err = errors.Join(err, c.Close())
 	}
 
-	pc.clients = append(pc.clients, c)
+	return err
+}
 
-	return c, nil
+func newMockClient(blocking bool, config beat.ClientConfig) *mockClient {
+	done := make(chan struct{})
+	return &mockClient{
+		done:       done,
+		ackHandler: newMockACKHandler(done, blocking, config),
+		blockChan:  make(chan struct{}, 1),
+	}
 }
 
 func (pc *mockPipelineConnector) cancelAllClients() {
@@ -683,22 +781,61 @@ func (pc *mockPipelineConnector) cancelAllClients() {
 	defer pc.mtx.Unlock()
 
 	for _, client := range pc.clients {
-		client.canceler()
+		client.cancel()
 	}
 }
 
-func newMockACKHandler(starter context.Context, blocking bool, config beat.ClientConfig) beat.EventListener {
+// SetAllowedEvents sets the maximum number of events the client will accept
+// before blocking. The limit is propagated to every existing client and to
+// any client that connects afterward.
+func (pc *mockPipelineConnector) SetAllowedEvents(limit int) {
+	pc.mtx.Lock()
+	defer pc.mtx.Unlock()
+
+	pc.allowedEventsSet = true
+	pc.allowedEvents = limit
+	for _, client := range pc.clients {
+		client.SetAllowedEvents(limit)
+	}
+}
+
+// AllowMoreEvents allows the client to accept more n events.
+func (pc *mockPipelineConnector) AllowMoreEvents(n int) {
+	pc.mtx.Lock()
+	defer pc.mtx.Unlock()
+
+	pc.allowedEventsSet = true
+	pc.allowedEvents += n
+	for _, client := range pc.clients {
+		client.AllowMoreEvents(n)
+	}
+}
+
+// UnblockClients removes all event count restrictions and unblocks the client
+func (pc *mockPipelineConnector) UnblockClients() {
+	pc.mtx.Lock()
+	defer pc.mtx.Unlock()
+
+	pc.allowedEventsSet = false
+	for _, client := range pc.clients {
+		client.Unblock()
+	}
+}
+
+func newMockACKHandler(done <-chan struct{}, blocking bool, config beat.ClientConfig) beat.EventListener {
 	if !blocking {
 		return config.EventListener
 	}
 
-	return acker.Combine(blockingACKer(starter), config.EventListener)
+	return acker.Combine(blockingACKer(done), config.EventListener)
 }
 
-func blockingACKer(starter context.Context) beat.EventListener {
+// blockingACKer blocks the publisher's ack call until done is closed. Tests
+// rely on this to hold cursorPublisher.forward in PublishAll long enough to
+// observe back-pressure scenarios.
+func blockingACKer(done <-chan struct{}) beat.EventListener {
 	return acker.EventPrivateReporter(func(acked int, private []any) {
-		for starter.Err() == nil {
-		}
+		<-done
 	})
 }
 

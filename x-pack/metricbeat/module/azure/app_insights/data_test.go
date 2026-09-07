@@ -13,18 +13,16 @@ import (
 
 	"github.com/elastic/beats/v7/metricbeat/mb"
 
-	"github.com/Azure/azure-sdk-for-go/services/preview/appinsights/v1/insights"
-	"github.com/Azure/go-autorest/autorest/date"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/elastic/elastic-agent-libs/mapstr"
 )
 
-func newMetricsTest(ts ...*date.Time) []MetricValue {
+func newMetricsTest(ts ...*time.Time) []MetricValue {
 	type values struct {
 		SegmentName map[string]string
-		Value       map[string]interface{}
-		T           *date.Time
+		Value       map[string]any
+		T           *time.Time
 	}
 
 	const numOfMetricValue = 3
@@ -36,17 +34,17 @@ func newMetricsTest(ts ...*date.Time) []MetricValue {
 	vals := [numOfMetricValue]values{
 		{
 			SegmentName: map[string]string{"request_url_host": ""},
-			Value:       map[string]interface{}{"users_count.unique": 44},
+			Value:       map[string]any{"users_count.unique": 44},
 			T:           ts[0],
 		},
 		{
 			SegmentName: map[string]string{"request_url_host": ""},
-			Value:       map[string]interface{}{"sessions_count.unique": 44},
+			Value:       map[string]any{"sessions_count.unique": 44},
 			T:           ts[1],
 		},
 		{
 			SegmentName: map[string]string{"request_url_host": "localhost"},
-			Value:       map[string]interface{}{"sessions_count.unique": 44},
+			Value:       map[string]any{"sessions_count.unique": 44},
 			T:           ts[2],
 		},
 	}
@@ -56,11 +54,11 @@ func newMetricsTest(ts ...*date.Time) []MetricValue {
 		mv = append(mv,
 			MetricValue{
 				SegmentName: map[string]string{},
-				Value:       map[string]interface{}{},
+				Value:       map[string]any{},
 				Segments: []MetricValue{
 					{
 						SegmentName: map[string]string{},
-						Value:       map[string]interface{}{},
+						Value:       map[string]any{},
 						Segments: []MetricValue{
 							{
 								SegmentName: vals[i].SegmentName,
@@ -80,9 +78,9 @@ func newMetricsTest(ts ...*date.Time) []MetricValue {
 
 func TestGroupMetrics(t *testing.T) {
 	t.Run("two dimensions groups with same timestamps", func(t *testing.T) {
-		timestamp1 := &date.Time{Time: time.Now()}
-		timestamp2 := &date.Time{Time: time.Now()}
-		timestamp3 := &date.Time{Time: time.Now()}
+		timestamp1 := new(time.Now())
+		timestamp2 := new(time.Now())
+		timestamp3 := new(time.Now())
 
 		metrics := newMetricsTest(timestamp1, timestamp2, timestamp3)
 
@@ -91,7 +89,7 @@ func TestGroupMetrics(t *testing.T) {
 				SegmentName: map[string]string{
 					"request_url_host": "",
 				},
-				Value: map[string]interface{}{
+				Value: map[string]any{
 					"users_count.unique": 44,
 				},
 				Start: timestamp1,
@@ -101,7 +99,7 @@ func TestGroupMetrics(t *testing.T) {
 				SegmentName: map[string]string{
 					"request_url_host": "",
 				},
-				Value: map[string]interface{}{
+				Value: map[string]any{
 					"sessions_count.unique": 44,
 				},
 				Start: timestamp2,
@@ -114,7 +112,7 @@ func TestGroupMetrics(t *testing.T) {
 				SegmentName: map[string]string{
 					"request_url_host": "localhost",
 				},
-				Value: map[string]interface{}{
+				Value: map[string]any{
 					"sessions_count.unique": 44,
 				},
 				Start: timestamp3,
@@ -141,9 +139,9 @@ func TestGroupMetrics(t *testing.T) {
 	})
 
 	t.Run("two dimensions groups with different timestamps", func(t *testing.T) {
-		timestamp1 := &date.Time{Time: time.Now()}
-		timestamp2 := &date.Time{Time: time.Now().Add(time.Minute)}
-		timestamp3 := &date.Time{Time: time.Now().Add(2 * time.Minute)}
+		timestamp1 := new(time.Now())
+		timestamp2 := new(time.Now().Add(time.Minute))
+		timestamp3 := new(time.Now().Add(2 * time.Minute))
 
 		metrics := newMetricsTest(timestamp1, timestamp2, timestamp3)
 
@@ -152,7 +150,7 @@ func TestGroupMetrics(t *testing.T) {
 				SegmentName: map[string]string{
 					"request_url_host": "",
 				},
-				Value: map[string]interface{}{
+				Value: map[string]any{
 					"users_count.unique": 44,
 				},
 				Start: timestamp1,
@@ -165,7 +163,7 @@ func TestGroupMetrics(t *testing.T) {
 				SegmentName: map[string]string{
 					"request_url_host": "",
 				},
-				Value: map[string]interface{}{
+				Value: map[string]any{
 					"sessions_count.unique": 44,
 				},
 				Start: timestamp2,
@@ -178,7 +176,7 @@ func TestGroupMetrics(t *testing.T) {
 				SegmentName: map[string]string{
 					"request_url_host": "localhost",
 				},
-				Value: map[string]interface{}{
+				Value: map[string]any{
 					"sessions_count.unique": 44,
 				},
 				Start: timestamp3,
@@ -213,43 +211,43 @@ func TestGroupMetrics(t *testing.T) {
 }
 
 func TestEventMapping(t *testing.T) {
-	startDate := date.Time{Time: time.Now()}
+	startDate := time.Now()
 	id := "123"
-	var info = insights.MetricsResultInfo{
-		AdditionalProperties: map[string]interface{}{
-			"requests/count":  map[string]interface{}{"sum": 12},
-			"requests/failed": map[string]interface{}{"sum": 10},
+	var info = MetricsResultInfo{
+		AdditionalProperties: map[string]any{
+			"requests/count":  map[string]any{"sum": 12},
+			"requests/failed": map[string]any{"sum": 10},
 		},
 		Start: &startDate,
 		End:   &startDate,
 	}
-	var metricResult = insights.MetricsResult{
+	var metricResult = MetricsResult{
 		Value: &info,
 	}
-	metrics := []insights.MetricsResultsItem{
+	metrics := []MetricsResultsItem{
 		{
 			ID:     &id,
 			Status: nil,
 			Body:   &metricResult,
 		},
 	}
-	var result = insights.ListMetricsResultsItem{
+	var result = ListMetricsResultsItem{
 		Value: &metrics,
 	}
 	applicationId := "abc"
 	events := EventsMapping(result, applicationId, "")
-	assert.Equal(t, len(events), 1)
+	assert.Len(t, events, 1)
 	for _, event := range events {
 		val1, _ := event.MetricSetFields.GetValue("start_date")
-		assert.Equal(t, val1, startDate.Time)
+		assert.Equal(t, startDate, val1)
 		val2, _ := event.MetricSetFields.GetValue("end_date")
-		assert.Equal(t, val2, startDate.Time)
+		assert.Equal(t, startDate, val2)
 		val3, _ := event.ModuleFields.GetValue("metrics.requests_count")
-		assert.Equal(t, val3, mapstr.M{"sum": 12})
+		assert.Equal(t, mapstr.M{"sum": 12}, val3)
 		val5, _ := event.ModuleFields.GetValue("metrics.requests_failed")
-		assert.Equal(t, val5, mapstr.M{"sum": 10})
+		assert.Equal(t, mapstr.M{"sum": 10}, val5)
 		val4, _ := event.ModuleFields.GetValue("application_id")
-		assert.Equal(t, val4, applicationId)
+		assert.Equal(t, applicationId, val4)
 
 	}
 
@@ -263,22 +261,22 @@ func TestEventMappingGrouping(t *testing.T) {
 	assert.NoError(t, err)
 
 	interval := "P152D"
-	results := []insights.MetricsResultsItem{
+	results := []MetricsResultsItem{
 		{
-			Body: &insights.MetricsResult{
-				Value: &insights.MetricsResultInfo{
-					Start:    &date.Time{Time: start},
-					End:      &date.Time{Time: end},
+			Body: &MetricsResult{
+				Value: &MetricsResultInfo{
+					Start:    &start,
+					End:      &end,
 					Interval: &interval,
-					Segments: &[]insights.MetricsSegmentInfo{
+					Segments: &[]MetricsSegmentInfo{
 						{
-							Start: &date.Time{Time: start},
-							End:   &date.Time{Time: end},
-							Segments: &[]insights.MetricsSegmentInfo{
+							Start: &start,
+							End:   &end,
+							Segments: &[]MetricsSegmentInfo{
 								{
-									AdditionalProperties: map[string]interface{}{
+									AdditionalProperties: map[string]any{
 										"request/urlHost": "",
-										"users/count":     map[string]interface{}{"unique": 1.0},
+										"users/count":     map[string]any{"unique": 1.0},
 									},
 								},
 							},
@@ -288,19 +286,19 @@ func TestEventMappingGrouping(t *testing.T) {
 			},
 		},
 		{
-			Body: &insights.MetricsResult{
-				Value: &insights.MetricsResultInfo{
-					Start:    &date.Time{Time: start},
-					End:      &date.Time{Time: end},
+			Body: &MetricsResult{
+				Value: &MetricsResultInfo{
+					Start:    &start,
+					End:      &end,
 					Interval: &interval,
-					Segments: &[]insights.MetricsSegmentInfo{
+					Segments: &[]MetricsSegmentInfo{
 						{
-							Start: &date.Time{Time: start},
-							End:   &date.Time{Time: end},
-							Segments: &[]insights.MetricsSegmentInfo{
+							Start: &start,
+							End:   &end,
+							Segments: &[]MetricsSegmentInfo{
 								{
-									AdditionalProperties: map[string]interface{}{
-										"sessions/count":  map[string]interface{}{"unique": 1.0},
+									AdditionalProperties: map[string]any{
+										"sessions/count":  map[string]any{"unique": 1.0},
 										"request/urlHost": "",
 									},
 								},
@@ -311,25 +309,25 @@ func TestEventMappingGrouping(t *testing.T) {
 			},
 		},
 		{
-			Body: &insights.MetricsResult{
-				Value: &insights.MetricsResultInfo{
-					Start:    &date.Time{Time: start},
-					End:      &date.Time{Time: end},
+			Body: &MetricsResult{
+				Value: &MetricsResultInfo{
+					Start:    &start,
+					End:      &end,
 					Interval: &interval,
-					Segments: &[]insights.MetricsSegmentInfo{
+					Segments: &[]MetricsSegmentInfo{
 						{
-							Start: &date.Time{Time: start},
-							End:   &date.Time{Time: end},
-							Segments: &[]insights.MetricsSegmentInfo{
+							Start: &start,
+							End:   &end,
+							Segments: &[]MetricsSegmentInfo{
 								{
-									AdditionalProperties: map[string]interface{}{
+									AdditionalProperties: map[string]any{
 										"browserTiming/urlHost": "localhost",
 									},
-									Segments: &[]insights.MetricsSegmentInfo{
+									Segments: &[]MetricsSegmentInfo{
 										{
-											AdditionalProperties: map[string]interface{}{
+											AdditionalProperties: map[string]any{
 												"browserTiming/urlPath":          "/test",
-												"browserTimings/networkDuration": map[string]interface{}{"avg": 1.5},
+												"browserTimings/networkDuration": map[string]any{"avg": 1.5},
 											},
 										},
 									},
@@ -341,24 +339,24 @@ func TestEventMappingGrouping(t *testing.T) {
 			},
 		},
 		{
-			Body: &insights.MetricsResult{
-				Value: &insights.MetricsResultInfo{
-					Start:    &date.Time{Time: start},
-					End:      &date.Time{Time: end},
+			Body: &MetricsResult{
+				Value: &MetricsResultInfo{
+					Start:    &start,
+					End:      &end,
 					Interval: &interval,
-					Segments: &[]insights.MetricsSegmentInfo{
+					Segments: &[]MetricsSegmentInfo{
 						{
-							Start: &date.Time{Time: start},
-							End:   &date.Time{Time: end},
-							Segments: &[]insights.MetricsSegmentInfo{
+							Start: &start,
+							End:   &end,
+							Segments: &[]MetricsSegmentInfo{
 								{
-									AdditionalProperties: map[string]interface{}{
+									AdditionalProperties: map[string]any{
 										"browserTiming/urlHost": "localhost",
 									},
-									Segments: &[]insights.MetricsSegmentInfo{
+									Segments: &[]MetricsSegmentInfo{
 										{
-											AdditionalProperties: map[string]interface{}{
-												"browserTimings/sendDuration": map[string]interface{}{"avg": 1.25},
+											AdditionalProperties: map[string]any{
+												"browserTimings/sendDuration": map[string]any{"avg": 1.25},
 												"browserTiming/urlPath":       "/test",
 											},
 										},
@@ -371,24 +369,24 @@ func TestEventMappingGrouping(t *testing.T) {
 			},
 		},
 		{
-			Body: &insights.MetricsResult{
-				Value: &insights.MetricsResultInfo{
-					Start:    &date.Time{Time: start},
-					End:      &date.Time{Time: end},
+			Body: &MetricsResult{
+				Value: &MetricsResultInfo{
+					Start:    &start,
+					End:      &end,
 					Interval: &interval,
-					Segments: &[]insights.MetricsSegmentInfo{
+					Segments: &[]MetricsSegmentInfo{
 						{
-							Start: &date.Time{Time: start},
-							End:   &date.Time{Time: end},
-							Segments: &[]insights.MetricsSegmentInfo{
+							Start: &start,
+							End:   &end,
+							Segments: &[]MetricsSegmentInfo{
 								{
-									AdditionalProperties: map[string]interface{}{
+									AdditionalProperties: map[string]any{
 										"browserTiming/urlHost": "localhost",
 									},
-									Segments: &[]insights.MetricsSegmentInfo{
+									Segments: &[]MetricsSegmentInfo{
 										{
-											AdditionalProperties: map[string]interface{}{
-												"browserTimings/receiveDuration": map[string]interface{}{"avg": 0.0},
+											AdditionalProperties: map[string]any{
+												"browserTimings/receiveDuration": map[string]any{"avg": 0.0},
 												"browserTiming/urlPath":          "/test",
 											},
 										},
@@ -401,24 +399,24 @@ func TestEventMappingGrouping(t *testing.T) {
 			},
 		},
 		{
-			Body: &insights.MetricsResult{
-				Value: &insights.MetricsResultInfo{
-					Start:    &date.Time{Time: start},
-					End:      &date.Time{Time: end},
+			Body: &MetricsResult{
+				Value: &MetricsResultInfo{
+					Start:    &start,
+					End:      &end,
 					Interval: &interval,
-					Segments: &[]insights.MetricsSegmentInfo{
+					Segments: &[]MetricsSegmentInfo{
 						{
-							Start: &date.Time{Time: start},
-							End:   &date.Time{Time: end},
-							Segments: &[]insights.MetricsSegmentInfo{
+							Start: &start,
+							End:   &end,
+							Segments: &[]MetricsSegmentInfo{
 								{
-									AdditionalProperties: map[string]interface{}{
+									AdditionalProperties: map[string]any{
 										"browserTiming/urlHost": "localhost",
 									},
-									Segments: &[]insights.MetricsSegmentInfo{
+									Segments: &[]MetricsSegmentInfo{
 										{
-											AdditionalProperties: map[string]interface{}{
-												"browserTimings/processingDuration": map[string]interface{}{"avg": 18.25},
+											AdditionalProperties: map[string]any{
+												"browserTimings/processingDuration": map[string]any{"avg": 18.25},
 												"browserTiming/urlPath":             "/test",
 											},
 										},
@@ -431,24 +429,24 @@ func TestEventMappingGrouping(t *testing.T) {
 			},
 		},
 		{
-			Body: &insights.MetricsResult{
-				Value: &insights.MetricsResultInfo{
-					Start:    &date.Time{Time: start},
-					End:      &date.Time{Time: end},
+			Body: &MetricsResult{
+				Value: &MetricsResultInfo{
+					Start:    &start,
+					End:      &end,
 					Interval: &interval,
-					Segments: &[]insights.MetricsSegmentInfo{
+					Segments: &[]MetricsSegmentInfo{
 						{
-							Start: &date.Time{Time: start},
-							End:   &date.Time{Time: end},
-							Segments: &[]insights.MetricsSegmentInfo{
+							Start: &start,
+							End:   &end,
+							Segments: &[]MetricsSegmentInfo{
 								{
-									AdditionalProperties: map[string]interface{}{
+									AdditionalProperties: map[string]any{
 										"browserTiming/urlHost": "localhost",
 									},
-									Segments: &[]insights.MetricsSegmentInfo{
+									Segments: &[]MetricsSegmentInfo{
 										{
-											AdditionalProperties: map[string]interface{}{
-												"browserTimings/totalDuration": map[string]interface{}{"avg": 22},
+											AdditionalProperties: map[string]any{
+												"browserTimings/totalDuration": map[string]any{"avg": 22},
 												"browserTiming/urlPath":        "/test",
 											},
 										},
@@ -462,7 +460,7 @@ func TestEventMappingGrouping(t *testing.T) {
 		},
 	}
 
-	result := insights.ListMetricsResultsItem{
+	result := ListMetricsResultsItem{
 		Value: &results,
 	}
 
@@ -518,18 +516,18 @@ func TestEventMappingGrouping(t *testing.T) {
 	}
 
 	events := EventsMapping(result, "2c944c0d-5231-43bb-a59a-dba54894c8d9", "")
-	assert.Equal(t, len(events), 2)
+	assert.Len(t, events, 2)
 	assert.ElementsMatch(t, expectedEvents, events)
 }
 
 func TestCleanMetricNames(t *testing.T) {
 	ex := "customDimensions/ExecutingAssemblyFileVersion"
 	result := cleanMetricNames(ex)
-	assert.Equal(t, result, "custom_dimensions_executing_assembly_file_version")
+	assert.Equal(t, "custom_dimensions_executing_assembly_file_version", result)
 	ex = "customDimensions/_MS.AggregationIntervalMs"
 	result = cleanMetricNames(ex)
-	assert.Equal(t, result, "custom_dimensions__ms_aggregation_interval_ms")
+	assert.Equal(t, "custom_dimensions__ms_aggregation_interval_ms", result)
 	ex = "customDimensions/_MS.IsAutocollected"
 	result = cleanMetricNames(ex)
-	assert.Equal(t, result, "custom_dimensions__ms_is_autocollected")
+	assert.Equal(t, "custom_dimensions__ms_is_autocollected", result)
 }

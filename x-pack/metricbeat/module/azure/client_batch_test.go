@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/monitor/query/azmetrics"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resources/armresources"
 	"github.com/stretchr/testify/assert"
@@ -46,6 +45,21 @@ func TestInitResourcesForBatch(t *testing.T) {
 		err := client.InitResources(mockConcurrentMapResourceMetrics)
 		assert.Error(t, err, "failed to retrieve resources: invalid resource query")
 		m.AssertExpectations(t)
+	})
+	t.Run("does not panic when all resource configs return an empty list", func(t *testing.T) {
+		client := NewMockBatchClient(logger)
+		client.Config = resourceQueryConfig
+		m := &MockService{}
+		// empty list + nil error: the "no resources of this type exist" path
+		m.On("GetResourceDefinitions", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*armresources.GenericResourceExpanded{}, nil)
+		client.AzureMonitorService = m
+
+		err := client.InitResources(mockConcurrentMapResourceMetrics)
+		require.NoError(t, err)
+
+		// The closer goroutine launched by InitResources runs asynchronously and
+		// will panic on close(nil) if the channels were never initialized.
+		time.Sleep(100 * time.Millisecond)
 	})
 }
 
@@ -99,7 +113,7 @@ func TestGetMetricsInBatch(t *testing.T) {
 		mr := MockReporterV2{}
 		mr.On("Error", mock.Anything).Return(true)
 		results := client.GetMetricsInBatch(groupedMetrics, referenceTime, &mr)
-		assert.Equal(t, len(results), 0)
+		assert.Empty(t, results, "expected no metric values when QueryResources returns an error")
 		m.AssertExpectations(t)
 	})
 
@@ -129,39 +143,39 @@ func TestGetMetricsInBatch(t *testing.T) {
 		m := &MockService{}
 		metrics := []azmetrics.Metric{
 			{
-				ID: to.Ptr("test"),
+				ID: new("test"),
 				Name: &azmetrics.LocalizableString{
-					Value:          to.Ptr("ActiveConnections"),
-					LocalizedValue: to.Ptr("Active Connections"),
+					Value:          new("ActiveConnections"),
+					LocalizedValue: new("Active Connections"),
 				},
 				TimeSeries: []azmetrics.TimeSeriesElement{
 					{
 						Data: []azmetrics.MetricValue{
 							{
-								Average:   to.Ptr(1.0),
-								Maximum:   to.Ptr(2.0),
-								Minimum:   to.Ptr(3.0),
-								TimeStamp: to.Ptr(time.Now()),
+								Average:   new(1.0),
+								Maximum:   new(2.0),
+								Minimum:   new(3.0),
+								TimeStamp: new(time.Now()),
 							},
 						},
 					},
 				},
-				Type:               to.Ptr("Microsoft.Insights/metrics"),
+				Type:               new("Microsoft.Insights/metrics"),
 				Unit:               &count,
-				DisplayDescription: to.Ptr("Total Active Connections for Microsoft.EventHub."),
-				ErrorCode:          to.Ptr("Success"),
+				DisplayDescription: new("Total Active Connections for Microsoft.EventHub."),
+				ErrorCode:          new("Success"),
 			},
 		}
 
 		m.On("QueryResources", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(
 			[]azmetrics.MetricData{{
-				EndTime:        to.Ptr("2025-01-28T15:00:00Z"),
-				StartTime:      to.Ptr("2025-01-28T14:00:00Z"),
+				EndTime:        new("2025-01-28T15:00:00Z"),
+				StartTime:      new("2025-01-28T14:00:00Z"),
 				Values:         metrics,
-				Interval:       to.Ptr("PT1H"),
-				Namespace:      to.Ptr("Microsoft.EventHub/Namespaces"),
-				ResourceID:     to.Ptr("resourceId1"),
-				ResourceRegion: to.Ptr("West Europe")}},
+				Interval:       new("PT1H"),
+				Namespace:      new("Microsoft.EventHub/Namespaces"),
+				ResourceID:     new("resourceId1"),
+				ResourceRegion: new("West Europe")}},
 			nil,
 		)
 
@@ -169,12 +183,12 @@ func TestGetMetricsInBatch(t *testing.T) {
 		mr := MockReporterV2{}
 
 		metricValues := client.GetMetricsInBatch(groupedMetrics, referenceTime, &mr)
-		require.Equal(t, len(metricValues), 1)
-		require.Equal(t, len(metricValues[0].Values), 1)
+		require.Len(t, metricValues, 1, "expected exactly one metric value group")
+		require.Len(t, metricValues[0].Values, 1, "expected exactly one value in the metric group")
 
-		assert.Equal(t, *metricValues[0].Values[0].avg, 1.0)
-		assert.Equal(t, *metricValues[0].Values[0].max, 2.0)
-		assert.Equal(t, *metricValues[0].Values[0].min, 3.0)
+		assert.InDelta(t, 1.0, *metricValues[0].Values[0].avg, 0.0001)
+		assert.InDelta(t, 2.0, *metricValues[0].Values[0].max, 0.0001)
+		assert.InDelta(t, 3.0, *metricValues[0].Values[0].min, 0.0001)
 
 		m.AssertExpectations(t)
 	})

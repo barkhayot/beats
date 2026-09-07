@@ -61,6 +61,11 @@ type JSONShard struct {
 	SearchQueryTime  json.Number `json:"sqti"`
 	SearchQueryTotal json.Number `json:"sqto"`
 
+	BulkTotalSizeInBytes    json.Number `json:"btsi"`
+	BulkTotalOperations     json.Number `json:"bto"`
+	TotalDataSetSizeInBytes json.Number `json:"dataset"`
+	DenseVectorCount        json.Number `json:"dvc"`
+
 	// only used for unassigned state
 	UnassignedReason  *string `json:"ur"`
 	UnassignedDetails *string `json:"ud"`
@@ -80,7 +85,7 @@ func eventsMapping(m *elasticsearch.MetricSet, r mb.ReporterV2, info *utils.Clus
 		appendNodeShards(nodeShards, &shard)
 	}
 
-	transactionID := utils.NewUUIDV4()
+	transactionID := utils.NewUUID()
 
 	sendNodeShardsEvent(r, info, slices.Collect(maps.Values(nodeShards)), transactionID)
 

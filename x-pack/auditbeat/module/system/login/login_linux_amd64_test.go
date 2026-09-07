@@ -19,7 +19,6 @@ import (
 
 	"github.com/elastic/beats/v7/auditbeat/ab"
 	"github.com/elastic/beats/v7/auditbeat/core"
-	abtest "github.com/elastic/beats/v7/auditbeat/testing"
 	mbtest "github.com/elastic/beats/v7/metricbeat/mb/testing"
 	"github.com/elastic/beats/v7/x-pack/auditbeat/module/system"
 	"github.com/elastic/elastic-agent-libs/mapstr"
@@ -30,14 +29,12 @@ func TestData(t *testing.T) {
 		t.Skip("Test only works on little-endian systems - skipping.")
 	}
 
-	defer abtest.SetupDataDir(t)()
-
 	config := getBaseConfig()
 	config["login.wtmp_file_pattern"] = "./testdata/wtmp"
 	config["login.btmp_file_pattern"] = ""
 	f := mbtest.NewReportingMetricSetV2WithRegistry(t, config, ab.Registry)
 	defer func() {
-		if err := f.(*MetricSet).utmpReader.bucket.DeleteBucket(); err != nil {
+		if err := f.(*MetricSet).utmpReader.bucket.DeleteBucket(); err != nil { //nolint:errcheck // unchecked type assertion
 			t.Fatalf("received error: %+v", err)
 		}
 	}()
@@ -63,8 +60,6 @@ func TestWtmp(t *testing.T) {
 		t.Skip("Test only works on little-endian systems - skipping.")
 	}
 
-	defer abtest.SetupDataDir(t)()
-
 	dir := setupTestDir(t)
 	defer os.RemoveAll(dir)
 
@@ -75,7 +70,7 @@ func TestWtmp(t *testing.T) {
 	config["login.btmp_file_pattern"] = ""
 	f := mbtest.NewReportingMetricSetV2WithRegistry(t, config, ab.Registry)
 	defer func() {
-		if err := f.(*MetricSet).utmpReader.bucket.DeleteBucket(); err != nil {
+		if err := f.(*MetricSet).utmpReader.bucket.DeleteBucket(); err != nil { //nolint:errcheck // unchecked type assertion
 			t.Fatalf("received error: %+v", err)
 		}
 	}()
@@ -184,14 +179,12 @@ func TestBtmp(t *testing.T) {
 		t.Skip("Test only works on little-endian systems - skipping.")
 	}
 
-	defer abtest.SetupDataDir(t)()
-
 	config := getBaseConfig()
 	config["login.wtmp_file_pattern"] = ""
 	config["login.btmp_file_pattern"] = "./testdata/btmp.amd"
 	f := mbtest.NewReportingMetricSetV2WithRegistry(t, config, ab.Registry)
 	defer func() {
-		if err := f.(*MetricSet).utmpReader.bucket.DeleteBucket(); err != nil {
+		if err := f.(*MetricSet).utmpReader.bucket.DeleteBucket(); err != nil { //nolint:errcheck // unchecked type assertion
 			t.Fatalf("received error: %+v", err)
 		}
 	}()
@@ -267,7 +260,7 @@ func TestBtmp(t *testing.T) {
 		"Timestamp is not equal: %+v", events[3].Timestamp)
 }
 
-func checkFieldValue(t *testing.T, mapstr mapstr.M, fieldName string, fieldValue interface{}) {
+func checkFieldValue(t *testing.T, mapstr mapstr.M, fieldName string, fieldValue any) {
 	value, err := mapstr.GetValue(fieldName)
 	if assert.NoError(t, err) {
 		switch v := value.(type) {
@@ -279,8 +272,8 @@ func checkFieldValue(t *testing.T, mapstr mapstr.M, fieldName string, fieldValue
 	}
 }
 
-func getBaseConfig() map[string]interface{} {
-	return map[string]interface{}{
+func getBaseConfig() map[string]any {
+	return map[string]any{
 		"module":   system.ModuleName,
 		"datasets": []string{"login"},
 	}

@@ -97,8 +97,6 @@ func TestSplitHostnamePort(t *testing.T) {
 		},
 	}
 	for _, test := range urlTests {
-		test := test
-
 		t.Run(test.name, func(t *testing.T) {
 			url := &url.URL{
 				Scheme: test.scheme,
@@ -120,7 +118,7 @@ func TestSplitHostnamePort(t *testing.T) {
 					t.Errorf("Unexpected host for %#v: expected %q, got %q", request, test.expectedHost, host)
 				}
 				if port != test.expectedPort {
-					t.Errorf("Unexpected port for %#v: expected %q, got %q", request, test.expectedPort, port)
+					t.Errorf("Unexpected port for %#v: expected %d, got %d", request, test.expectedPort, port)
 				}
 			}
 
@@ -148,7 +146,7 @@ func TestNonZeroRedirect(t *testing.T) {
 
 	var via []*http.Request
 	// Test requests within the limit
-	for i := 0; i < limit; i++ {
+	for range limit {
 		req := makeTestHTTPRequest(t)
 		assert.Nil(t, checker(req, via))
 		via = append(via, req)

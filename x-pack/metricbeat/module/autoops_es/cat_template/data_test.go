@@ -3,7 +3,6 @@
 // you may not use this file except in compliance with the Elastic License.
 
 //go:build !integration
-// +build !integration
 
 package cat_template
 
@@ -38,7 +37,7 @@ func expectValidParsedDataCheckingTemplateNames(t *testing.T, data metricset.Fet
 	auto_ops_testing.CheckAllEventsUseSameTransactionId(t, events)
 
 	for _, event := range events {
-		auto_ops_testing.CheckEventWithRandomTransactionId(t, event, data.ClusterInfo)
+		auto_ops_testing.CheckEventWithoutTransactionId(t, event, data.ClusterInfo)
 
 		// metrics exist
 		require.NotNil(t, auto_ops_testing.GetObjectValue(event.MetricSetFields, "template.order"))
@@ -65,7 +64,7 @@ func expectValidParsedData(t *testing.T, data metricset.FetcherData[[]CatTemplat
 	auto_ops_testing.CheckAllEventsUseSameTransactionId(t, events)
 
 	for _, event := range events {
-		auto_ops_testing.CheckEventWithRandomTransactionId(t, event, data.ClusterInfo)
+		auto_ops_testing.CheckEventWithoutTransactionId(t, event, data.ClusterInfo)
 
 		// metrics exist
 		require.NotNil(t, auto_ops_testing.GetObjectValue(event.MetricSetFields, "template.order"))
@@ -90,16 +89,16 @@ func expectValidParsedDetailedTemplates(t *testing.T, data metricset.FetcherData
 	event1 := auto_ops_testing.GetEventByName(t, events, "template.template_name", "simple-response")
 	event2 := auto_ops_testing.GetEventByName(t, events, "template.template_name", "detailed-response")
 
-	auto_ops_testing.CheckEventWithRandomTransactionId(t, event2, data.ClusterInfo)
+	auto_ops_testing.CheckEventWithoutTransactionId(t, event2, data.ClusterInfo)
 
-	simpleMapping, err := utils.DeserializeData[map[string]interface{}]([]byte(getMappingObject(t, "simple-response")))
+	simpleMapping, err := utils.DeserializeData[map[string]any]([]byte(getMappingObject(t, "simple-response")))
 	require.NoError(t, err)
 	simple, err := templateSchema.Apply(*simpleMapping)
 	require.NoError(t, err)
 
 	simpleTemplate := mapstr.M{"template": simple}
 
-	detailedMapping, err := utils.DeserializeData[map[string]interface{}]([]byte(getMappingObject(t, "detailed-response")))
+	detailedMapping, err := utils.DeserializeData[map[string]any]([]byte(getMappingObject(t, "detailed-response")))
 	require.NoError(t, err)
 	detailed, err := templateSchema.Apply(*detailedMapping)
 	require.NoError(t, err)
